@@ -15,7 +15,7 @@ struct CloudResources
 {
 	RenderResource cloudsScatteringTransmittance;
 	RenderResource cloudsDepth;
-	RenderResource cloudsShadowMap;
+	RenderResource cloudsVisibilityMap;
 	RenderResource weather;
 };
 
@@ -49,6 +49,7 @@ private:
 	TextureHandle shadowMap;
 
 	RenderResource lastFrameClouds;
+	RenderResource lastFrameVisibility;
 
 	void GenerateWeather(CommandList& list, uint32_t weatherTexture);
 	void GenerateNoise(CommandList& list, uint32_t baseShapeTexture, uint32_t detailShapeTexture);

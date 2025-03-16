@@ -2,6 +2,7 @@
 
 #include "RootSignature.hlsli"
 #include "Noise.hlsli"
+#include "Math.hlsli"
 
 struct BindData
 {
@@ -9,11 +10,6 @@ struct BindData
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
-
-float RemapRange(float value, float inMin, float inMax, float outMin, float outMax)
-{
-	return outMin + (((value - inMin) / (inMax - inMin)) * (outMax - outMin));
-}
 
 static const uint baseSize = 128;
 static const uint detailSize = 32;

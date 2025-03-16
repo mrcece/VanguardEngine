@@ -8,6 +8,7 @@
 #include <Rendering/RenderComponents.h>
 #include <Editor/EntityReflection.h>
 #include <Editor/ImGuiExtensions.h>
+#include <Editor/CvarHelpers.h>
 #include <Rendering/Atmosphere.h>
 #include <Rendering/Clouds.h>
 #include <Rendering/Bloom.h>
@@ -874,6 +875,8 @@ void EditorUI::DrawControls(RenderDevice* device)
 			{
 				Renderer::Get().ReloadShaderPipelines();
 			}
+
+			CvarHelpers::Checkbox("toneMappingEnabled", "Tone mapping");
 		}
 
 		ImGui::End();
@@ -1071,7 +1074,9 @@ void EditorUI::DrawAtmosphereControls(RenderDevice* device, entt::registry& regi
 	{
 		if (ImGui::Begin("Sky Atmosphere", &atmosphereControlsOpen))
 		{
+			ImGui::Text("General");
 			ComponentProperties::RenderTimeOfDayComponent(registry, atmosphere.sunLight);
+			CvarHelpers::Checkbox("farVolumetricShadowFix", "Far volume shadow fix enabled");
 
 			ImGui::Separator();
 
@@ -1086,60 +1091,19 @@ void EditorUI::DrawAtmosphereControls(RenderDevice* device, entt::registry& regi
 			ImGui::Separator();
 
 			ImGui::Text("Clouds");
-
-			static bool rayMarchGroundTruth = *CvarGet("cloudRayMarchQuality", int) > 0;
-			ImGui::Checkbox("Ray march ground truth", &rayMarchGroundTruth);
-
-			if (rayMarchGroundTruth != *CvarGet("cloudRayMarchQuality", int))
-			{
-				CvarSet("cloudRayMarchQuality", rayMarchGroundTruth ? 1 : 0);
-			}
-
-			static bool renderLightShafts = *CvarGet("renderLightShafts", int) > 0;
-			ImGui::Checkbox("Render light shafts", &renderLightShafts);
-
-			if (renderLightShafts != *CvarGet("renderLightShafts", int))
-			{
-				CvarSet("renderLightShafts", renderLightShafts ? 1 : 0);
-			}
-
-			static int shadowMapResolution = *CvarGet("cloudShadowMapResolution", int);
-			bool shadowMapResolutionValid = IsPowerOf2(shadowMapResolution);
-
-			if (!shadowMapResolutionValid)
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetCurrentContext()->Style.DisabledAlpha);
-			ImGui::InputInt("Shadow map resolution", &shadowMapResolution);
-			if (!shadowMapResolutionValid)
-			{
-				ImGui::PopStyleVar();
-
-				// Show a help when the item is disabled.
-				if (ImGui::BeginItemTooltip())
-				{
-					ImGui::TextUnformatted("Resolution must be a power of 2");
-					ImGui::EndTooltip();
-				}
-			}
-
-			if (shadowMapResolutionValid && shadowMapResolution != *CvarGet("cloudShadowMapResolution", int))
-			{
-				CvarSet("cloudShadowMapResolution", shadowMapResolution);
-			}
-
-			static float shadowMapScale = *CvarGet("cloudShadowMapScale", float);
-			ImGui::DragFloat("Shadow map scale", &shadowMapScale, 0.0002f, 0.000001f, 10.f, "%.4f");
-
-			if (shadowMapScale != *CvarGet("cloudShadowMapScale", float))
-			{
-				CvarSet("cloudShadowMapScale", shadowMapScale);
-			}
+			CvarHelpers::Checkbox("cloudRayMarchQuality", "Ray march ground truth");
+			CvarHelpers::Checkbox("renderLightShafts", "Render light shafts");
+			CvarHelpers::Slider("cloudRenderScale", "Render scale", 0.1f, 1.f);
+			CvarHelpers::Slider("cloudShadowRenderScale", "Shadow render scale", 0.1f, 1.f);
+			CvarHelpers::Checkbox("cloudBlurEnabled", "Blur enabled");
+			CvarHelpers::Slider("cloudBlurRadius", "Blur radius", 1, 8);
 
 			ImGui::Separator();
 
 			ImGui::Text("Atmosphere");
 			bool dirty = false;
 			static float haze = 8;
-			static float lastHaze = haze;
+			static float lastHaze = -1;
 
 			ImGui::TextDisabled("Presets");
 			if (ImGui::Button("Clear sky"))

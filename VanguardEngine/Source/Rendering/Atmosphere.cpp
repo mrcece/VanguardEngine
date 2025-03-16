@@ -289,6 +289,8 @@ void Atmosphere::Initialize(RenderDevice* inDevice, entt::registry& registry)
 
 	CvarCreate("renderCloudShadowMap", "Projects the cloud shadow map onto the planet surface, for debugging purposes. 0=off, 1=on", 0);
 	CvarCreate("renderLightShafts", "Controls rendering of volumetric light shafts, currently only cast by clouds. 0=off, 1=on", 1);
+	CvarCreate("farVolumetricShadowFix", "Enables a fix for very distant objects that are masked by volumetric shadows, which normally "
+		"show up too brightly against the surrounding sky", 1);
 
 	transmissionPrecomputeLayout = RenderPipelineLayout{}
 		.ComputeShader({ "Atmosphere/AtmospherePrecompute", "TransmittanceLutMain" });
@@ -443,7 +445,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 	//composePass.Read(outputHDR, ResourceBind::SRV);
 	composePass.Read(cloudResources.cloudsScatteringTransmittance, ResourceBind::SRV);
 	composePass.Read(cloudResources.cloudsDepth, ResourceBind::SRV);
-	composePass.Read(cloudResources.cloudsShadowMap, ResourceBind::SRV);
+	composePass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
 	composePass.Read(depthStencil, ResourceBind::SRV);
 	composePass.Write(outputHDR, TextureView{}.UAV("", 0));
 
@@ -461,6 +463,9 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 			.Macro({ "CLOUDS_RENDER_SHADOWMAP", renderShadowMap })
 			.Macro({ "RENDER_LIGHT_SHAFTS", renderLightShafts });
 
+		if (*CvarGet("farVolumetricShadowFix", int) > 0)
+			composeLayout.Macro({ "ENABLE_FAR_SHADOW_FIX" });
+
 		list.BindPipeline(composeLayout);
 
 		struct {
@@ -469,7 +474,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 			uint32_t cameraIndex;
 			uint32_t cloudsScatteringTransmittanceTexture;
 			uint32_t cloudsDepthTexture;
-			uint32_t cloudsShadowMap;
+			uint32_t cloudsVisibilityTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t outputTexture;
 			uint32_t transmissionTexture;
@@ -484,7 +489,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
 		bindData.cloudsScatteringTransmittanceTexture = resources.Get(cloudResources.cloudsScatteringTransmittance);
 		bindData.cloudsDepthTexture = resources.Get(cloudResources.cloudsDepth);
-		bindData.cloudsShadowMap = resources.Get(cloudResources.cloudsShadowMap);
+		bindData.cloudsVisibilityTexture = resources.Get(cloudResources.cloudsVisibilityMap);
 		bindData.geometryDepthTexture = resources.Get(depthStencil);
 		bindData.outputTexture = resources.Get(outputHDR, "");
 		bindData.transmissionTexture = resources.Get(resourceHandles.transmittanceHandle);

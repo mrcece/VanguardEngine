@@ -65,7 +65,7 @@ void RenderUtils::ClearUAV(CommandList& list, BufferHandle buffer, uint32_t buff
 	}
 }
 
-void RenderUtils::GaussianBlur(CommandList& list, RenderPassResources& resources, RenderResource inputTexture, RenderResource outputTexture, uint32_t radius, float sigma)
+void RenderUtils::GaussianBlurInternal(CommandList& list, RenderPassResources& resources, RenderResource inputTexture, RenderResource outputTexture, uint32_t radius, float sigma)
 {
 	if (sigma < 0.f)
 	{

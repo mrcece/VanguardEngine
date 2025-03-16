@@ -723,6 +723,67 @@ float3 GetSkyRadianceToPoint(AtmosphereData atmosphere, Texture2D transmittanceL
 	return scattering * RayleighPhase(nu) + singleMieScattering * MiePhase(nu, mieAnisotropy);
 }
 
+// Custom variation that treats the shadowLength term as distance along the view ray to omit scattering, starting from
+// the camera outwards, as opposed to starting at the end of the ray and backwards with GetSkyRadianceToPoint
+float3 GetSkyRadianceToPointNearShadow(AtmosphereData atmosphere, Texture2D transmittanceLut, Texture3D scatteringLut, SamplerState lutSampler,
+	float3 cameraPosition, float3 position, float shadowLength, float3 sunDirection, out float3 transmittance)
+{
+	float3 viewDirection = normalize(position - cameraPosition);
+	float radius = length(cameraPosition);
+	float radiusMu = dot(cameraPosition, viewDirection);
+	float distanceToAtmosphereTop = -radiusMu - sqrt(radiusMu * radiusMu - radius * radius + atmosphere.radiusTop * atmosphere.radiusTop);
+
+	if (distanceToAtmosphereTop > 0.f)
+	{
+		cameraPosition += viewDirection * distanceToAtmosphereTop;
+		radius = atmosphere.radiusTop;
+		radiusMu += distanceToAtmosphereTop;
+	}
+	
+	float mu = radiusMu / radius;
+	float muS = dot(cameraPosition, sunDirection) / radius;
+	float nu = dot(viewDirection, sunDirection);
+	float d = length(position - cameraPosition);
+	bool rayIntersectsGround = RayIntersectsGround(atmosphere, radius, mu);
+	
+	// Avoid rendering artifacts near the horizon, see: https://github.com/ebruneton/precomputed_atmospheric_scattering/pull/32#issuecomment-480523982
+	if (!rayIntersectsGround)
+	{
+		float muHorizon = -sqrt(max(1.f - (atmosphere.radiusBottom / radius) * (atmosphere.radiusBottom / radius), 0.f));
+		mu = max(mu, muHorizon + 0.004f);
+	}
+	
+	transmittance = GetTransmittance(atmosphere, transmittanceLut, lutSampler, radius, mu, d, rayIntersectsGround);
+	
+	float3 singleMieScattering;
+	float3 scattering = GetCombinedScattering(atmosphere, scatteringLut, lutSampler, radius, mu, muS, nu, rayIntersectsGround, singleMieScattering);
+	
+	if (shadowLength == 0.f)
+	{
+		scattering = GetCombinedScattering(atmosphere, scatteringLut, lutSampler, radius, mu, muS, nu, rayIntersectsGround, singleMieScattering);
+	}
+	else
+	{
+		// This is not correct, but appears somewhat close for far distances.
+		d = min(d, shadowLength);
+		
+		float radiusP = clamp(sqrt(d * d + 2.f * radius * mu * d + radius * radius), atmosphere.radiusBottom, atmosphere.radiusTop);
+		float muP = (radius * mu + d) / radiusP;
+		float muSP = (radius * muS + d * nu) / radiusP;
+		
+		scattering = GetCombinedScattering(atmosphere, scatteringLut, lutSampler, radiusP, muP, muSP, nu, rayIntersectsGround, singleMieScattering);
+		
+		float3 shadowTransmittance = GetTransmittance(atmosphere, transmittanceLut, lutSampler, radius, mu, shadowLength, rayIntersectsGround);
+		scattering *= shadowTransmittance;
+		singleMieScattering *= shadowTransmittance;
+	}
+
+	// Avoid rendering artifacts when the sun is below the horizon.
+	singleMieScattering *= smoothstep(0.f, 0.01f, muS);
+	
+	return scattering * RayleighPhase(nu) + singleMieScattering * MiePhase(nu, mieAnisotropy);
+}
+
 void GetSunAndSkyIrradiance(AtmosphereData atmosphere, Texture2D transmittanceLut, Texture2D irradianceLut, SamplerState lutSampler,
 	float3 position, float3 normal, float3 sunDirection, out float3 sunIrradiance, out float3 skyIrradiance)
 {
@@ -742,21 +803,21 @@ void GetSunAndSkyIrradiance(AtmosphereData atmosphere, Texture2D transmittanceLu
 void DecomposeSeparableSunAndSkyIrradiance(AtmosphereData atmosphere, Texture2D transmittanceLut, Texture2D irradianceLut, SamplerState lutSampler,
 	float3 position, float3 sunDirection, out float3 separatedSunIrradiance, out float3 separatedSkyIrradiance)
 {
-    float radius = length(position);
-    float muS = dot(position, sunDirection) / radius;
+	float radius = length(position);
+	float muS = dot(position, sunDirection) / radius;
 	
 	// Separable forms of the equations found in GetSunAndSkyIrradiance
-    separatedSunIrradiance = atmosphere.solarIrradiance * GetTransmittanceToSun(atmosphere, transmittanceLut, lutSampler, radius, muS);
-    separatedSkyIrradiance = GetIrradiance(atmosphere, irradianceLut, lutSampler, radius, muS) * 0.5f;
+	separatedSunIrradiance = atmosphere.solarIrradiance * GetTransmittanceToSun(atmosphere, transmittanceLut, lutSampler, radius, muS);
+	separatedSkyIrradiance = GetIrradiance(atmosphere, irradianceLut, lutSampler, radius, muS) * 0.5f;
 }
 
 void RecomposeSeparableSunAndSkyIrradiance(float3 position, float3 normal, float3 sunDirection, float3 separatedSunIrradiance, float3 separatedSkyIrradiance,
 	out float3 sunIrradiance, out float3 skyIrradiance)
 {
-    float radius = length(position);
+	float radius = length(position);
 	
-    sunIrradiance = separatedSunIrradiance * max(dot(normal, sunDirection), 0.f);
-    skyIrradiance = separatedSkyIrradiance * (1.f + dot(normal, position) / radius);
+	sunIrradiance = separatedSunIrradiance * max(dot(normal, sunDirection), 0.f);
+	skyIrradiance = separatedSkyIrradiance * (1.f + dot(normal, position) / radius);
 }
 
 float3 GetSolarRadiance(AtmosphereData atmosphere)
@@ -813,12 +874,12 @@ float3 SampleAtmosphere(AtmosphereData atmosphere, Camera camera, float3 directi
 {
 	float3 cameraPosition = ComputeAtmosphereCameraPosition(camera);
 	float3 planetCenter = ComputeAtmospherePlanetCenter(atmosphere);
-    
+	
 	// IBL doesn't support light shafts, likely unnecessary.
 	float shadowLength = 0.f;
 	
 	float3 transmittance;
-    float3 radiance = GetSkyRadiance(atmosphere, transmittanceLut, scatteringLut, lutSampler, cameraPosition - planetCenter, direction, shadowLength, sunDirection, transmittance);
+	float3 radiance = GetSkyRadiance(atmosphere, transmittanceLut, scatteringLut, lutSampler, cameraPosition - planetCenter, direction, shadowLength, sunDirection, transmittance);
 	
 	// If the ray intersects the sun, add solar radiance.
 	// We don't want this for specular IBL, since the sun has immense radiant energy that will not
@@ -829,11 +890,11 @@ float3 SampleAtmosphere(AtmosphereData atmosphere, Camera camera, float3 directi
 		radiance += transmittance * GetSolarRadiance(atmosphere);
 	}
 	
-    float4 planetRadiance = GetPlanetSurfaceRadiance(atmosphere, planetCenter, cameraPosition, direction, shadowLength, sunDirection, transmittanceLut, scatteringLut, irradianceLut, lutSampler);
+	float4 planetRadiance = GetPlanetSurfaceRadiance(atmosphere, planetCenter, cameraPosition, direction, shadowLength, sunDirection, transmittanceLut, scatteringLut, irradianceLut, lutSampler);
 	radiance = lerp(radiance, planetRadiance.xyz, planetRadiance.w);
 	
 	// Multiply the exposure in here since this atmosphere sample is only ever used outside of the main atmosphere compose.
-    return radiance * atmosphereRadianceExposure;
+	return radiance * atmosphereRadianceExposure;
 }
 
 #endif  // __ATMOSPHERE_HLSLI__

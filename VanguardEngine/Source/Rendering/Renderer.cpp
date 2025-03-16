@@ -178,7 +178,7 @@ void Renderer::UpdateCameraBuffer(const entt::registry& registry)
 	XMFLOAT4 sunPositionFloat;
 	XMStoreFloat4(&sunPositionFloat, sunPosition);
 	auto sunView = XMMatrixLookAtRH(sunPosition, sunPosition + sunForward, sunUpward);
-	const auto viewSize = *CvarGet("cloudShadowMapResolution", int) * *CvarGet("cloudShadowMapScale", float);
+	const auto viewSize = 100.f;
 	auto sunProjection = XMMatrixOrthographicRH(viewSize, viewSize, sunNearPlane, sunFarPlane);
 	cameras.emplace_back(Camera{
 		.position = sunPositionFloat,
@@ -212,11 +212,6 @@ void Renderer::CreatePipelines()
 		.VertexShader({ "Forward", "VSMain" })
 		.PixelShader({ "Forward", "PSMain" })
 		.DepthEnabled(true, false, DepthTestFunction::Equal);  // Prepass provides depth.
-
-	postProcessLayout = RenderPipelineLayout{}
-		.VertexShader({ "PostProcess", "VSMain" })
-		.PixelShader({ "PostProcess", "PSMain" })
-		.DepthEnabled(false);
 }
 
 BufferHandle Renderer::CreateLightBuffer(const entt::registry& registry)
@@ -286,6 +281,7 @@ void Renderer::Initialize(std::unique_ptr<WindowFrame>&& inWindow, std::unique_p
 	{
 		Renderer::Get().ReloadShaderPipelines();
 	});
+	CvarCreate("toneMappingEnabled", "Controls tone mapping as a post process step", 1);
 	
 	constexpr size_t maxVertices = 32 * 1024 * 1024;
 
@@ -559,7 +555,7 @@ void Renderer::Render(entt::registry& registry)
 	forwardPass.Read(iblResources.prefilterTag, ResourceBind::SRV);
 	forwardPass.Read(iblResources.brdfTag, ResourceBind::SRV);
 	forwardPass.Read(atmosphereIrradiance, ResourceBind::SRV);
-	forwardPass.Read(cloudResources.cloudsShadowMap, ResourceBind::SRV);
+	forwardPass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
 	forwardPass.Read(meshIndirectCulledRenderArgsTag, ResourceBind::Indirect);
 	forwardPass.Output(outputHDRTag, OutputBind::RTV, LoadType::Clear);
 	forwardPass.Bind([&](CommandList& list, RenderPassResources& resources)
@@ -590,9 +586,8 @@ void Renderer::Render(entt::registry& registry)
 			uint32_t materialBuffer;
 			uint32_t lightBuffer;
 			uint32_t atmosphereIrradianceBuffer;
-			uint32_t cloudsShadowMap;
 			float globalWeatherCoverage;
-			float padding;
+			XMFLOAT2 padding;
 			ClusterData clusterData;
 			IblData iblData;
 		} bindData;
@@ -604,7 +599,6 @@ void Renderer::Render(entt::registry& registry)
 		bindData.materialBuffer = resources.Get(materialBufferTag);
 		bindData.lightBuffer = resources.Get(lightBufferTag);
 		bindData.atmosphereIrradianceBuffer = resources.Get(atmosphereIrradiance);
-		bindData.cloudsShadowMap = resources.Get(cloudResources.cloudsShadowMap);
 		bindData.globalWeatherCoverage = clouds.coverage;  // #TODO: Scale by precipitation?
 		bindData.clusterData = clusterData;
 		bindData.iblData = iblData;
@@ -632,6 +626,16 @@ void Renderer::Render(entt::registry& registry)
 	postProcessPass.Output(outputLDRTag, OutputBind::RTV, LoadType::Clear);
 	postProcessPass.Bind([&](CommandList& list, RenderPassResources& resources)
 	{
+		auto postProcessLayout = RenderPipelineLayout{}
+			.VertexShader({ "PostProcess", "VSMain" })
+			.PixelShader({ "PostProcess", "PSMain" })
+			.DepthEnabled(false);
+
+		if (*CvarGet("toneMappingEnabled", int) > 0)
+		{
+			postProcessLayout.Macro({ "ENABLE_TONEMAPPING" });
+		}
+
 		list.BindPipeline(postProcessLayout);
 		list.BindConstants("bindData", { resources.Get(outputHDRTag) });
 

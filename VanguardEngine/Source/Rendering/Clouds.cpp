@@ -2,14 +2,12 @@
 
 #include <Rendering/Clouds.h>
 #include <Rendering/Device.h>
+#include <Rendering/Renderer.h>
 #include <Rendering/RenderGraph.h>
 #include <Rendering/RenderPass.h>
 #include <Rendering/Atmosphere.h>
 #include <Rendering/RenderUtils.h>
 #include <Utility/Math.h>
-
-// #TEMP
-#include <Rendering/Renderer.h>
 
 void Clouds::GenerateWeather(CommandList& list, uint32_t weatherTexture)
 {
@@ -64,9 +62,11 @@ void Clouds::Initialize(RenderDevice* inDevice)
 {
 	device = inDevice;
 
-	CvarCreate("cloudShadowMapResolution", "Defines the width and height of the sun shadow map for clouds", 2048);
-	CvarCreate("cloudShadowMapScale", "Multiplier for the scale of the cloud shadow map. Larger values increase scope but reduce fidelity", 0.05f);
 	CvarCreate("cloudRayMarchQuality", "Controls the ray march quality of the clouds. Increasing quality degrades performance. 0=default, 1=groundTruth", 0);
+	CvarCreate("cloudRenderScale", "Controls the render scale of the volumetric clouds", 1.f);
+	CvarCreate("cloudShadowRenderScale", "Controls the render scale of the shadows and light shafts for clouds", 0.75f);
+	CvarCreate("cloudBlurEnabled", "Controls if a blur stage is used when rendering clouds", 0);
+	CvarCreate("cloudBlurRadius", "Gaussian blur radius for the cloud blur pass", 2);
 
 	weatherLayout = RenderPipelineLayout{}
 		.ComputeShader({ "Clouds/Weather", "Main" });
@@ -119,6 +119,7 @@ void Clouds::Initialize(RenderDevice* inDevice)
 	//distortionNoise = device->GetResourceManager().Create(distortionNoiseDesc, VGText("Clouds distortion noise"));
 
 	lastFrameClouds.id = 0;
+	lastFrameVisibility.id = 0;
 }
 
 CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, const Atmosphere& atmosphere, const RenderResource cameraBuffer, const RenderResource depthStencil, const RenderResource atmosphereIrradiance)
@@ -155,12 +156,15 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		GenerateWeather(list, resources.Get(weatherTag));
 	});
 
+	const float cloudRenderScale = *CvarGet("cloudRenderScale", float);
+	const float cloudShadowRenderScale = *CvarGet("cloudShadowRenderScale", float);
+
 	auto& cloudsPass = graph.AddPass("Clouds Pass", ExecutionQueue::Graphics);
 	const auto cloudOutput = cloudsPass.Create(TransientTextureDescription{
 		.width = 0,
 		.height = 0,
 		.depth = 1,
-		.resolutionScale = 1.f,
+		.resolutionScale = cloudRenderScale,
 		.format = DXGI_FORMAT_R16G16B16A16_FLOAT
 	}, VGText("Clouds scattering transmittance"));
 	cloudsPass.Read(cameraBuffer, ResourceBind::SRV);
@@ -176,7 +180,7 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		.width = 0,
 		.height = 0,
 		.depth = 1,
-		.resolutionScale = 1.f,
+		.resolutionScale = cloudRenderScale,
 		.format = DXGI_FORMAT_R32_FLOAT
 	}, VGText("Clouds depth"));
 	cloudsPass.Write(cloudDepth, TextureView{}.UAV("", 0));
@@ -185,8 +189,8 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		atmosphereIrradiance](CommandList& list, RenderPassResources& resources)
 	{
 		auto cloudsLayout = RenderPipelineLayout{}
-			.VertexShader({ "Clouds/Clouds", "VSMain" })
-			.PixelShader({ "Clouds/Clouds", "PSMain" })
+			.VertexShader({ "Clouds/Main", "VSMain" })
+			.PixelShader({ "Clouds/Main", "PSMain" })
 			.BlendMode(false, BlendMode{})
 			.DepthEnabled(false);
 
@@ -206,7 +210,7 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 			float solarZenithAngle;
 			uint32_t timeSlice;
 			uint32_t lastFrameTexture;
-			XMFLOAT2 outputResolution;
+			uint32_t outputResolution[2];
 			uint32_t depthTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t blueNoiseTexture;
@@ -227,8 +231,8 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		bindData.timeSlice = time % 16;
 		
 		const auto& cloudOutputComponent = device->GetResourceManager().Get(resources.GetTexture(cloudOutput));
-		bindData.outputResolution.x = cloudOutputComponent.description.width;
-		bindData.outputResolution.y = cloudOutputComponent.description.height;
+		bindData.outputResolution[0] = cloudOutputComponent.description.width;
+		bindData.outputResolution[1] = cloudOutputComponent.description.height;
 
 		bindData.lastFrameTexture = 0;
 		if (lastFrame.id != 0)
@@ -245,71 +249,102 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		list.DrawFullscreenQuad();
 	});
 
-	auto& shadowPass = graph.AddPass("Clouds Shadow Map Pass", ExecutionQueue::Graphics);
-	const auto shadowMapSize = *CvarGet("cloudShadowMapResolution", int);
-	const auto shadowMapTag = shadowPass.Create(TransientTextureDescription{
-		.width = (uint32_t)shadowMapSize,
-		.height = (uint32_t)shadowMapSize,
-		.depth = 1,
-		.format = DXGI_FORMAT_R16_FLOAT
-	}, VGText("Clouds shadow map"));
-	shadowPass.Read(cameraBuffer, ResourceBind::SRV);
-	shadowPass.Read(weatherTag, ResourceBind::SRV);
-	shadowPass.Read(baseShapeNoiseTag, ResourceBind::SRV);
-	shadowPass.Output(shadowMapTag, OutputBind::RTV, LoadType::Preserve);
-	shadowPass.Bind([this, cameraBuffer, weatherTag, baseShapeNoiseTag, shadowMapTag, solarZenithAngle](CommandList& list, RenderPassResources& resources)
+	auto blurEnabled = *CvarGet("cloudBlurEnabled", int);
+	
+	auto& blurPass = graph.AddPass("Clouds Blur Pass", ExecutionQueue::Compute, blurEnabled > 0);
+	blurPass.Write(cloudOutput, TextureView{}.UAV("", 0));
+	blurPass.Bind([this, cloudOutput](CommandList& list, RenderPassResources& resources)
 	{
-		const auto orthographicScale = *CvarGet("cloudShadowMapResolution", int) * *CvarGet("cloudShadowMapScale", float);
-		auto shadowMapLayout = RenderPipelineLayout{}
-			.VertexShader({ "Clouds/Clouds", "VSMain" })
-			.PixelShader({ "Clouds/Clouds", "PSMain" })
-			.BlendMode(false, BlendMode{})
-			.DepthEnabled(false)
-			.Macro({ "CLOUDS_LOW_DETAIL" })
-			.Macro({ "CLOUDS_FULL_RESOLUTION" })
-			.Macro({ "CLOUDS_ONLY_DEPTH" })
-			.Macro({ "CLOUDS_RENDER_ORTHOGRAPHIC" })
-			.Macro({ "CLOUDS_CAMERA_IN_KILOMETERS" })
-			.Macro({ "CLOUDS_ORTHOGRAPHIC_SCALE", orthographicScale });  // Scale is in kilometers.
+		auto radius = *CvarGet("cloudBlurRadius", int);
 
+		RenderUtils::Get().GaussianBlur(list, resources, cloudOutput, radius);
+	});
+
+	auto visibilityEnabled = *CvarGet("renderLightShafts", int);
+
+	auto& visibilityPass = graph.AddPass("Clouds Sky Visibility Pass", ExecutionQueue::Compute, visibilityEnabled > 0);
+	const auto visibilityMapTag = visibilityPass.Create(TransientTextureDescription{
+		.width = 0,
+		.height = 0,
+		.depth = 1,
+		.resolutionScale = cloudShadowRenderScale,
+		.format = DXGI_FORMAT_R16_FLOAT
+	}, VGText("Clouds visibility map"));
+	visibilityPass.Read(cameraBuffer, ResourceBind::SRV);
+	visibilityPass.Read(weatherTag, ResourceBind::SRV);
+	visibilityPass.Read(baseShapeNoiseTag, ResourceBind::SRV);
+	visibilityPass.Read(depthStencil, ResourceBind::SRV);
+	visibilityPass.Read(blueNoiseTag, ResourceBind::SRV);
+	visibilityPass.Read(atmosphereIrradiance, ResourceBind::SRV);
+	visibilityPass.Read(lastFrameVisibility, ResourceBind::SRV);
+	visibilityPass.Write(visibilityMapTag, TextureView{}
+		.UAV("", 0));
+	visibilityPass.Bind([this, cameraBuffer, weatherTag, baseShapeNoiseTag, depthStencil, blueNoiseTag, atmosphereIrradiance,
+		visibilityMapTag, solarZenithAngle, lastFrame=lastFrameVisibility](CommandList& list, RenderPassResources& resources)
+	{
+		auto visibilityLayout = RenderPipelineLayout{}
+			.ComputeShader({ "Clouds/Visibility", "Main" })
+			.Macro({ "CLOUDS_LOW_DETAIL" });
+			// Interestingly, applying the ONLY_DEPTH macro does not appear to help performance. The issue there is likely the transmittance
+			// approximation being too conservative and allowing too many steps into the cloud. However, if this is done then small clouds
+			// will yield too much shadow and does not look visibily correct.
+			//.Macro({ "CLOUDS_ONLY_DEPTH" });
+		
 		if (*CvarGet("cloudRayMarchQuality", int) > 0)
 		{
-			shadowMapLayout.Macro({ "CLOUDS_MARCH_GROUND_TRUTH_DETAIL" });
+			visibilityLayout.Macro({ "CLOUDS_MARCH_GROUND_TRUTH_DETAIL" });
 		}
 
-		list.BindPipeline(shadowMapLayout);
+		list.BindPipeline(visibilityLayout);
 
 		struct {
+			uint32_t outputTexture;
 			uint32_t weatherTexture;
 			uint32_t baseShapeNoiseTexture;
-			uint32_t detailShapeNoiseTexture;
 			uint32_t cameraBuffer;
 			uint32_t cameraIndex;
 			float solarZenithAngle;
 			uint32_t timeSlice;
 			uint32_t lastFrameTexture;
-			XMFLOAT2 outputResolution;
-			uint32_t depthTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t blueNoiseTexture;
 			uint32_t atmosphereIrradianceBuffer;
-			XMFLOAT2 wind;
 			float time;
+			XMFLOAT2 wind;
 		} bindData;
 
+		bindData.outputTexture = resources.Get(visibilityMapTag);
 		bindData.weatherTexture = resources.Get(weatherTag);
 		bindData.baseShapeNoiseTexture = resources.Get(baseShapeNoiseTag);
 		bindData.cameraBuffer = resources.Get(cameraBuffer);
-		bindData.cameraIndex = 2;  // #TODO: This is awful.
+		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
 		bindData.solarZenithAngle = solarZenithAngle;
+
+		static int time = 0;
+		time++;
+		bindData.timeSlice = time % 16;
+
+		bindData.lastFrameTexture = 0;
+		if (lastFrame.id != 0)
+			bindData.lastFrameTexture = resources.Get(lastFrame);
+
+		bindData.geometryDepthTexture = resources.Get(depthStencil);
+		bindData.blueNoiseTexture = resources.Get(blueNoiseTag);
+		bindData.atmosphereIrradianceBuffer = resources.Get(atmosphereIrradiance);
 		bindData.wind = { windDirection.x * windStrength, windDirection.y * windStrength };
 		bindData.time = Renderer::Get().GetAppTime();
 
 		list.BindConstants("bindData", bindData);
-		list.DrawFullscreenQuad();
+
+		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(visibilityMapTag));
+		const auto dispatchX = std::ceilf(outputComponent.description.width / 8.f);
+		const auto dispatchY = std::ceilf(outputComponent.description.height / 8.f);
+
+		list.Dispatch(dispatchX, dispatchY, 1);
 	});
 
 	lastFrameClouds = cloudOutput;
+	lastFrameVisibility = visibilityMapTag;
 
-	return { cloudOutput, cloudDepth, shadowMapTag, weatherTag };
+	return { cloudOutput, cloudDepth, visibilityMapTag, weatherTag };
 }

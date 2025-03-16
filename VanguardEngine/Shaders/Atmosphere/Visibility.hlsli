@@ -6,7 +6,7 @@
 #include "Camera.hlsli"
 
 // Position must be in atmosphere space.
-float CalculateSunVisibility(float3 position, Camera sunCamera, Texture2D<float> cloudsShadowMap)
+float CalculateSunVisibility(float3 position, Camera sunCamera/*, Texture2D<float> cloudsShadowMap*/)
 {
     matrix sunViewProjection = mul(sunCamera.view, sunCamera.projection);
     
@@ -15,7 +15,8 @@ float CalculateSunVisibility(float3 position, Camera sunCamera, Texture2D<float>
     float3 projectedCoords = positionSunSpace.xyz / positionSunSpace.w;
     projectedCoords = projectedCoords * 0.5 + 0.5;
 		
-    float shadowSample = cloudsShadowMap.Sample(bilinearClamp, projectedCoords.xy);
+    //float shadowSample = cloudsShadowMap.Sample(bilinearClamp, projectedCoords.xy);
+    float shadowSample = 0.f;
     
 	// Direct occlusion to the sun, just sample the clouds depth map.
     return (shadowSample > 0 && shadowSample < 10000) ? 0.5f : 1.f;

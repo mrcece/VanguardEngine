@@ -37,7 +37,12 @@ float4 PSMain(PSInput input) : SV_Target
 {
 	Texture2D<float4> mainOutput = ResourceDescriptorHeap[bindData.mainOutput];
 	const float4 mainOutputHDR = mainOutput.Sample(bilinearWrap, input.uv);
+	
+#ifdef ENABLE_TONEMAPPING
 	const float3 toneMapped = ToneMap(mainOutputHDR.rgb);
+#else
+    const float3 toneMapped = mainOutputHDR.rgb;
+#endif
 
 	return float4(toneMapped, 1.f);
 }
