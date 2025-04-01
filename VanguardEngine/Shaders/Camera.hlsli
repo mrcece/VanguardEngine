@@ -8,16 +8,15 @@
 struct Camera
 {
 	float4 position;  // World space.
-	// Boundary
 	matrix view;
 	matrix projection;
 	matrix inverseView;
 	matrix inverseProjection;
+	float4 lastFramePosition;  // World space.
 	matrix lastFrameView;
 	matrix lastFrameProjection;
 	matrix lastFrameInverseView;
 	matrix lastFrameInverseProjection;
-	// Boundary
 	float nearPlane;
 	float farPlane;
 	float fieldOfView;  // Horizontal, radians.

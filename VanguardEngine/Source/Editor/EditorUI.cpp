@@ -1095,7 +1095,6 @@ void EditorUI::DrawAtmosphereControls(RenderDevice* device, entt::registry& regi
 			CvarHelpers::Checkbox("renderLightShafts", "Render light shafts");
 			CvarHelpers::Slider("cloudRenderScale", "Render scale", 0.1f, 1.f);
 			CvarHelpers::Slider("cloudShadowRenderScale", "Shadow render scale", 0.1f, 1.f);
-			CvarHelpers::Checkbox("cloudBlurEnabled", "Blur enabled");
 			CvarHelpers::Slider("cloudBlurRadius", "Blur radius", 1, 8);
 
 			ImGui::Separator();

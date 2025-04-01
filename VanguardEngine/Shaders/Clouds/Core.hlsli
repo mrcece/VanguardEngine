@@ -238,14 +238,14 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 	
 	// Low detail reduces step count as well.
 #ifndef CLOUDS_LOW_DETAIL
-    const int baseStepCount = 160;
-    const float smallStepMultiplier = 0.2;
+	const int baseStepCount = 160;
+	const float smallStepMultiplier = 0.2;
 #else
 	const int baseStepCount = 20;
 	const float smallStepMultiplier = 0.35;
 #endif
 
-    const int steps = (baseStepCount - (baseStepCount * 0.5 * zDot));  // half at zenith, baseStepCount at horizon.
+	const int steps = (baseStepCount - (baseStepCount * 0.5 * zDot));  // half at zenith, baseStepCount at horizon.
 	const float marchWidth = marchEnd - marchStart;
 
 	// #TODO: Tweak this some more to reduce artifacts without increasing step counts.
@@ -340,7 +340,7 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 			// References:
 			// 0.05: http://www.patarnott.com/satsens/pdf/opticalPropertiesCloudsReview.pdf
 			// 0.026: https://amt.copernicus.org/articles/14/4959/2021/
-            float3 scattCoeff = 0.026.xxx;
+			float3 scattCoeff = 0.026.xxx;
 			float3 absorCoeff = 0.xxx;  // Cloud albedo ~= 1.
 			float3 trans = transmittance.xxx;
 			ComputeScatteringIntegration(cloudDensity, energy, stepSize, scattCoeff, absorCoeff, scatteredLuminance, trans);
@@ -361,7 +361,7 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 
 			// Update the depth until about 50% light transmittance, this is a decent approximation given that clouds have no surface.
 			// #TODO: Use Frostbite's improved depth approximation, also look at bitsquid's method.
-            if (transmittance > 0.5f || depth > 100000)
+			if (transmittance > 0.5f || depth > 100000)
 				depth = marchStart + dist;
 		}
 
@@ -472,8 +472,7 @@ void RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> det
 	float2 blueNoiseSamplePos = uv * outputResolution;
 	blueNoiseSamplePos = blueNoiseSamplePos / float2(blueNoiseWidth, blueNoiseHeight);
 	float rayOffset = blueNoiseTexture.Sample(pointWrap, blueNoiseSamplePos);
-	//float jitter = (rayOffset - 0.5f) * 2.f;  // Rescale to [-1, 1].
-    float jitter = rayOffset;
+	float jitter = rayOffset;  // Note: don't rescale to [-1, 1], as this could render participating media behind the camera.
 	
 	RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture, origin, direction, jitter, marchStart, marchEnd, sunDirection, wind, time, scatteredLuminance, transmittance, depth);
 }

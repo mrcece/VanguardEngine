@@ -160,6 +160,8 @@ inline void RenderPass::Bind(std::function<void(CommandList&, RenderPassResource
 inline void RenderPass::Validate() const
 {
 #if !BUILD_RELEASE
+	VGAssert(binding, "Pass validation failed in '%s': Render passes must have a Bind()'ing set.", stableName.data());
+
 	// Check that no resources are read and written in this pass. A write implies a read.
 	std::vector<RenderResource> overlap;
 	std::set_intersection(reads.cbegin(), reads.cend(), writes.cbegin(), writes.cend(), std::back_inserter(overlap));

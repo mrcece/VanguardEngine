@@ -48,7 +48,8 @@ private:
 
 	TextureHandle shadowMap;
 
-	RenderResource lastFrameClouds;
+	RenderResource lastFrameScatteringUpscaled;
+	RenderResource lastFrameDepthUpscaled;
 	RenderResource lastFrameVisibility;
 
 	void GenerateWeather(CommandList& list, uint32_t weatherTexture);

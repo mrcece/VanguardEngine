@@ -14,14 +14,14 @@ struct BindData
 	uint cameraIndex;
 	float solarZenithAngle;
 	uint timeSlice;
-	uint lastFrameTexture;
-	uint2 outputResolution;
 	uint depthTexture;
 	uint geometryDepthTexture;
 	uint blueNoiseTexture;
 	uint atmosphereIrradianceBuffer;
-	float2 wind;
 	float time;
+	float2 wind;
+	uint2 outputResolution;
+	uint2 upscaledResolution;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
@@ -56,93 +56,46 @@ float4 PSMain(PixelIn input) : SV_Target
 {
 	StructuredBuffer<Camera> cameraBuffer = ResourceDescriptorHeap[bindData.cameraBuffer];
 	Camera camera = cameraBuffer[bindData.cameraIndex];
+	
+	// Get the UV coordinates that are top-left aligned.
+	float2 alignedUv = floor(input.uv * bindData.outputResolution) / float2(bindData.outputResolution);
 
-	static const uint crossFilter[] = {
-		0, 8, 2, 10,
-		12, 4, 14, 6,
-		3, 11, 1, 9,
-		15, 7, 13, 5
-	};
-
-	int2 pixel = input.uv * bindData.outputResolution;
-	int index = (pixel.x + 4 * pixel.y) % 16;
-#ifdef CLOUDS_FULL_RESOLUTION
-	if (true)
-#else
-	if (index == crossFilter[bindData.timeSlice])
-#endif
-	{
-		float3 sunDirection = float3(sin(bindData.solarZenithAngle), 0.f, cos(bindData.solarZenithAngle));
+	// Jitter the UV coordinates for temporal accumulation. Note that this is only used for the ray direction,
+	// nothing else, otherwise the output coordinates would be wrong. Doesn't have a meaningful impact on the blue
+	// noise offset. Note that the jitter uses the upscaled resolution, not the low resolution.
+	float2 jitteredUv = JitterUv(alignedUv, bindData.upscaledResolution, bindData.timeSlice);
+	
+	float3 sunDirection = float3(sin(bindData.solarZenithAngle), 0.f, cos(bindData.solarZenithAngle));
 #ifdef CLOUDS_RENDER_ORTHOGRAPHIC
-		// This is equivalent to -sunDirection.
-		float3 rayDirection = ComputeRayDirection(camera, 0.5.xx);
+	// This is equivalent to -sunDirection.
+	float3 rayDirection = ComputeRayDirection(camera, 0.5.xx);
 #else
-		float3 rayDirection = ComputeRayDirection(camera, input.uv);
+	float3 rayDirection = ComputeRayDirection(camera, jitteredUv);
 #endif
 
-		Texture3D<float> baseShapeNoiseTexture = ResourceDescriptorHeap[bindData.baseShapeNoiseTexture];
-		Texture3D<float> detailShapeNoiseTexture = ResourceDescriptorHeap[bindData.detailShapeNoiseTexture];
-		StructuredBuffer<float3> atmosphereIrradiance = ResourceDescriptorHeap[bindData.atmosphereIrradianceBuffer];
-		Texture2D<float3> weatherTexture = ResourceDescriptorHeap[bindData.weatherTexture];
-		Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
-		Texture2D<float> blueNoiseTexture = ResourceDescriptorHeap[bindData.blueNoiseTexture];
+	Texture3D<float> baseShapeNoiseTexture = ResourceDescriptorHeap[bindData.baseShapeNoiseTexture];
+	Texture3D<float> detailShapeNoiseTexture = ResourceDescriptorHeap[bindData.detailShapeNoiseTexture];
+	StructuredBuffer<float3> atmosphereIrradiance = ResourceDescriptorHeap[bindData.atmosphereIrradianceBuffer];
+	Texture2D<float3> weatherTexture = ResourceDescriptorHeap[bindData.weatherTexture];
+	Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
+	Texture2D<float> blueNoiseTexture = ResourceDescriptorHeap[bindData.blueNoiseTexture];
 
-		float3 scatteredLuminance;
-		float transmittance;
-		float depth;  // Kilometers.
-		RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
-			geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
-			sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
+	float3 scatteredLuminance;
+	float transmittance;
+	float depth;  // Kilometers.
+	RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
+		geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
+		sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
 
 #ifdef CLOUDS_ONLY_DEPTH
-		return depth;
+	return depth;
 #else
-		RWTexture2D<float> depthTexture = ResourceDescriptorHeap[bindData.depthTexture];
-		depthTexture[input.uv * bindData.outputResolution] = depth;
+	RWTexture2D<float> depthTexture = ResourceDescriptorHeap[bindData.depthTexture];
+	depthTexture[input.uv * bindData.outputResolution] = depth;
 
-		float4 output;
-		output.rgb = scatteredLuminance;
-		output.a = transmittance;
-		return output;
-#endif
-	}
-
-#ifndef CLOUDS_FULL_RESOLUTION
-	else
-	{
-		// Not rendering this pixel this frame, so reproject instead.
-		Texture2D<float4> lastFrameTexture = ResourceDescriptorHeap[bindData.lastFrameTexture];
-		RWTexture2D<float> depthTexture = ResourceDescriptorHeap[bindData.depthTexture];
-
-		// THIS DOESN"T MAKE SENSE! THINK ABOUT THIS MORE
-		//
-		//
-		float depth = depthTexture[input.uv * bindData.outputResolution];
-		depth *= 1000.0;  // Convert to meters.
-
-		// Ensure that the reprojected pixel is not now being occluded by geometry.
-		Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
-
-		float geometryDepth = geometryDepthTexture.Sample(bilinearClamp, input.uv);
-		geometryDepth = LinearizeDepth(camera, geometryDepth) * camera.farPlane;
-		if (geometryDepth < camera.farPlane)
-		{
-			if (geometryDepth < depth)
-			{
-				// Geometry masks this pixel.
-                return float4(0.xxx, 1);
-            }
-		}
-
-		float2 reprojectedUv = ReprojectUv(camera, input.uv, depth);
-
-		float4 lastFrame = 0.xxxx;
-		if (bindData.lastFrameTexture != 0)
-		{
-			lastFrame = lastFrameTexture.Sample(downsampleBorder, reprojectedUv);
-		}
-
-		return lastFrame;
-	}
+	float4 output;
+	output.rgb = scatteredLuminance;
+	output.a = transmittance;
+	return output;
 #endif
 }

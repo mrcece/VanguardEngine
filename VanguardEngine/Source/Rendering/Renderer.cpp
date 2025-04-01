@@ -128,6 +128,10 @@ void Renderer::UpdateCameraBuffer(const entt::registry& registry)
 
 	std::vector<Camera> cameras;
 
+	XMFLOAT3 lastFrameTranslation;
+	auto lastFrameTranslationVector = XMMatrixInverse(nullptr, globalLastFrameViewMatrix).r[3];
+	XMStoreFloat3(&lastFrameTranslation, lastFrameTranslationVector);
+
 	// Standard spectator camera.
 	cameras.emplace_back(Camera{
 		.position = XMFLOAT4{ translation.x, translation.y, translation.z, 0.f },
@@ -135,6 +139,7 @@ void Renderer::UpdateCameraBuffer(const entt::registry& registry)
 		.projection = globalProjectionMatrix,
 		.inverseView = XMMatrixInverse(nullptr, globalViewMatrix),
 		.inverseProjection = XMMatrixInverse(nullptr, globalProjectionMatrix),
+		.lastFramePosition = XMFLOAT4{ lastFrameTranslation.x, lastFrameTranslation.y, lastFrameTranslation.z, 0.f },
 		.lastFrameView = globalLastFrameViewMatrix,
 		.lastFrameProjection = globalLastFrameProjectionMatrix,
 		.lastFrameInverseView = XMMatrixInverse(nullptr, globalLastFrameViewMatrix),
@@ -154,6 +159,7 @@ void Renderer::UpdateCameraBuffer(const entt::registry& registry)
 		.projection = frozenProjection,
 		.inverseView = XMMatrixInverse(nullptr, frozenView),
 		.inverseProjection = XMMatrixInverse(nullptr, frozenProjection),
+		.lastFramePosition = XMFLOAT4{ translation.x, translation.y, translation.z, 0.f },
 		.lastFrameView = frozenView,
 		.lastFrameProjection = frozenProjection,
 		.lastFrameInverseView = XMMatrixInverse(nullptr, frozenView),
@@ -186,6 +192,7 @@ void Renderer::UpdateCameraBuffer(const entt::registry& registry)
 		.projection = sunProjection,
 		.inverseView = XMMatrixInverse(nullptr, sunView),
 		.inverseProjection = XMMatrixInverse(nullptr, sunProjection),
+		.lastFramePosition = sunPositionFloat,
 		.lastFrameView = XMMatrixIdentity(),  // We should never need last frame matrices for this camera.
 		.lastFrameProjection = XMMatrixIdentity(),
 		.lastFrameInverseView = XMMatrixIdentity(),

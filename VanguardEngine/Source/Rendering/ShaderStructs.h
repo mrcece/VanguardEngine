@@ -15,6 +15,7 @@ struct Camera
 	XMMATRIX projection;
 	XMMATRIX inverseView;
 	XMMATRIX inverseProjection;
+	XMFLOAT4 lastFramePosition;  // World space.
 	XMMATRIX lastFrameView;
 	XMMATRIX lastFrameProjection;
 	XMMATRIX lastFrameInverseView;
