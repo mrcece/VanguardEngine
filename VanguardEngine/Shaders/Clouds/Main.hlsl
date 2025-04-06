@@ -2,6 +2,7 @@
 
 #include "RootSignature.hlsli"
 #include "Camera.hlsli"
+#include "Color.hlsli"
 #include "Reprojection.hlsli"
 #include "Clouds/Core.hlsli"
 
@@ -83,9 +84,15 @@ float4 PSMain(PixelIn input) : SV_Target
 	float3 scatteredLuminance;
 	float transmittance;
 	float depth;  // Kilometers.
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	int stepCount = RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
+		geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
+		sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
+#else
 	RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
 		geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
 		sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
+#endif
 
 #ifdef CLOUDS_ONLY_DEPTH
 	return depth;
@@ -94,8 +101,13 @@ float4 PSMain(PixelIn input) : SV_Target
 	depthTexture[input.uv * bindData.outputResolution] = depth;
 
 	float4 output;
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	output = float4(MapToRainbow(stepCount / 200.f), 0.f);
+#else
 	output.rgb = scatteredLuminance;
 	output.a = transmittance;
+#endif
+
 	return output;
 #endif
 }

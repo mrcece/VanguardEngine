@@ -1091,12 +1091,32 @@ void EditorUI::DrawAtmosphereControls(RenderDevice* device, entt::registry& regi
 			ImGui::Separator();
 
 			ImGui::Text("Clouds");
-			CvarHelpers::Checkbox("cloudRayMarchQuality", "Ray march ground truth");
+
+			static int rayMarchQuality = *CvarGet("cloudRayMarchQuality", int);
+			static int lastRayMarchQuality = rayMarchQuality;
+			ImGui::TextDisabled("Ray march quality");
+			if (ImGui::Button("Low detail"))
+				rayMarchQuality = 0;
+			ImGui::SameLine();
+			if (ImGui::Button("Normal"))
+				rayMarchQuality = 1;
+			ImGui::SameLine();
+			if (ImGui::Button("Ground truth"))
+				rayMarchQuality = 2;
+
+			if (rayMarchQuality != lastRayMarchQuality)
+			{
+				CvarSet("cloudRayMarchQuality", rayMarchQuality);
+				lastRayMarchQuality = rayMarchQuality;
+			}
+			
 			CvarHelpers::Checkbox("renderLightShafts", "Render light shafts");
 			CvarHelpers::Slider("cloudRenderScale", "Render scale", 0.1f, 1.f);
 			CvarHelpers::Slider("cloudShadowRenderScale", "Shadow render scale", 0.1f, 1.f);
-			CvarHelpers::Slider("cloudBlurRadius", "Blur radius", 1, 8);
 
+			// Debug tools.
+			CvarHelpers::Checkbox("cloudDebugMarchCount", "Debug march count");
+			
 			ImGui::Separator();
 
 			ImGui::Text("Atmosphere");

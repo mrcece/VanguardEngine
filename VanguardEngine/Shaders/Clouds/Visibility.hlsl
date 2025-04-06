@@ -88,10 +88,16 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 	float rayOffset = blueNoiseTexture.Sample(pointWrap, blueNoiseSamplePos);
 	float jitter = (rayOffset - 0.5f) * 2.f;  // Rescale to [-1, 1]
 	
+	// #TODO: jittering this is a bit of a bandaid, producing a very stochastic output and relying on blurring to
+	// resolve the output. Should improve the underlying rendering here.
+	
 	float stepSize = (marchEnd - marchStart) / 20;
 	dist += jitter * stepSize;
 	
 	float totalShadow = 0.f;
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	int totalSteps = 0;
+#endif
 	
 	while (dist < marchEnd)
 	{
@@ -118,14 +124,20 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 			}
 		}
 		
-		
 		// March towards the sun.
 		float3 scatteredLuminance;
 		float transmittance;
 		float depth;  // Kilometers.
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+		int stepCount = RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
+			position, sunDirection, 0.f, localMarchStart, localMarchEnd, sunDirection, bindData.wind, bindData.time,
+			scatteredLuminance, transmittance, depth);
+		totalSteps += stepCount;
+#else
 		RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
 			position, sunDirection, 0.f, localMarchStart, localMarchEnd, sunDirection, bindData.wind, bindData.time,
 			scatteredLuminance, transmittance, depth);
+#endif
 		
 		// Experimenting with weighted contribution to reduce shadows far away.
 		float weight = 15.f - 0.12 * pow(dist, 1.5f);
@@ -139,7 +151,11 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 		dist += stepSize;
 	}
 	
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	return totalSteps;
+#else
 	return totalShadow;
+#endif
 }
 
 [RootSignature(RS)]

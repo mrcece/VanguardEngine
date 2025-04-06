@@ -465,6 +465,8 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 
 		if (*CvarGet("farVolumetricShadowFix", int) > 0)
 			composeLayout.Macro({ "ENABLE_FAR_SHADOW_FIX" });
+		if (*CvarGet("cloudDebugMarchCount", int) > 0)
+			composeLayout.Macro({ "CLOUDS_DEBUG_MARCHCOUNT" });
 
 		list.BindPipeline(composeLayout);
 

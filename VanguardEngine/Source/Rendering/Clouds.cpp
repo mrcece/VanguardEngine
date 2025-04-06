@@ -62,10 +62,10 @@ void Clouds::Initialize(RenderDevice* inDevice)
 {
 	device = inDevice;
 
-	CvarCreate("cloudRayMarchQuality", "Controls the ray march quality of the clouds. Increasing quality degrades performance. 0=default, 1=groundTruth", 0);
+	CvarCreate("cloudRayMarchQuality", "Controls the ray march quality of the clouds. Increasing quality degrades performance. 0=lowDetail, 1=default, 2=groundTruth", 1);
 	CvarCreate("cloudRenderScale", "Controls the render scale of the volumetric clouds", 0.25f);
 	CvarCreate("cloudShadowRenderScale", "Controls the render scale of the shadows and light shafts for clouds", 0.75f);
-	CvarCreate("cloudBlurRadius", "Gaussian blur radius for the cloud blur pass", 2);
+	CvarCreate("cloudDebugMarchCount", "Debug cloud ray march steps", 0);
 
 	weatherLayout = RenderPipelineLayout{}
 		.ComputeShader({ "Clouds/Weather", "Main" });
@@ -193,10 +193,12 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 			.BlendMode(false, BlendMode{})
 			.DepthEnabled(false);
 
-		if (*CvarGet("cloudRayMarchQuality", int) > 0)
-		{
+		if (*CvarGet("cloudRayMarchQuality", int) < 1)
+			cloudsLayout.Macro({ "CLOUDS_LOW_DETAIL" });
+		else if (*CvarGet("cloudRayMarchQuality", int) > 1)
 			cloudsLayout.Macro({ "CLOUDS_MARCH_GROUND_TRUTH_DETAIL" });
-		}
+		if (*CvarGet("cloudDebugMarchCount", int) > 0)
+			cloudsLayout.Macro({ "CLOUDS_DEBUG_MARCHCOUNT" });
 
 		list.BindPipeline(cloudsLayout);
 
@@ -345,16 +347,14 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 	{
 		auto visibilityLayout = RenderPipelineLayout{}
 			.ComputeShader({ "Clouds/Visibility", "Main" })
-			.Macro({ "CLOUDS_LOW_DETAIL" });
+			.Macro({ "CLOUDS_LOW_DETAIL" });  // Always low detail, no matter the quality setting
 			// Interestingly, applying the ONLY_DEPTH macro does not appear to help performance. The issue there is likely the transmittance
 			// approximation being too conservative and allowing too many steps into the cloud. However, if this is done then small clouds
 			// will yield too much shadow and does not look visibily correct.
 			//.Macro({ "CLOUDS_ONLY_DEPTH" });
 		
-		if (*CvarGet("cloudRayMarchQuality", int) > 0)
-		{
-			visibilityLayout.Macro({ "CLOUDS_MARCH_GROUND_TRUTH_DETAIL" });
-		}
+		if (*CvarGet("cloudDebugMarchCount", int) > 0)
+			visibilityLayout.Macro({ "CLOUDS_DEBUG_MARCHCOUNT" });
 
 		list.BindPipeline(visibilityLayout);
 

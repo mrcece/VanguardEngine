@@ -219,8 +219,17 @@ float ComputeLightEnergy(Texture2D<float3> weatherTexture, Texture3D<float> base
 	return outScatter * phase * inScatter;
 }
 
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+#define MARCH_RESULT int
+#define RETURN_EARLYOUT 0
+#else
+// Standard rendering.
+#define MARCH_RESULT void
+#define RETURN_EARLYOUT
+#endif
+
 // Jitter is in the domain of [-1, 1]
-void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> detailShapeNoiseTexture,
+MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> detailShapeNoiseTexture,
 	StructuredBuffer<float3> atmosphereIrradiance, Texture2D<float3> weatherTexture, float3 origin, float3 direction, float jitter,
 	float marchStart, float marchEnd, float3 sunDirection, float2 wind, float time, out float3 scatteredLuminance, out float transmittance,
 	out float depth)
@@ -261,6 +270,10 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 
 	float dist = 0.f;
 	int detailSteps = 0;  // If >0, march in small steps.
+	
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	int loopCount = 0;
+#endif
 
 #ifdef CLOUDS_MARCH_GROUND_TRUTH_DETAIL
 	// Marching in ground truth detail is very expensive, especially for shadow mapping when the sun is low in the sky.
@@ -274,6 +287,11 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 	for (int i = 0; i < steps; ++i)
 #endif
 	{
+		// If the march count debugging is enabled, save i each iteration.
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+		loopCount = i + 1;
+#endif
+		
 		if (dist > marchEnd)
 			break;  // Left the cloud layer.
 
@@ -307,6 +325,10 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 
 			float coneDensity = SampleCloudDensityCone(weatherTexture, baseShapeNoiseTexture, detailShapeNoiseTexture, position, wind, time);
 			coneDensity = (coneDensity + cloudDensity) / float(noiseKernelSize + 1);
+			
+#ifdef CLOUDS_LOW_DETAIL
+			coneDensity *= 5;
+#endif
 			
 			// Depth-only rendering does not need to evaluate the lighting model.
 #if !defined(CLOUDS_ONLY_DEPTH) && !defined(CLOUDS_DEPTH_ACCURATE_MODEL)
@@ -343,6 +365,9 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 			float3 scattCoeff = 0.026.xxx;
 			float3 absorCoeff = 0.xxx;  // Cloud albedo ~= 1.
 			float3 trans = transmittance.xxx;
+#ifdef CLOUDS_LOW_DETAIL
+			scattCoeff = 0.04.xxx;
+#endif
 			ComputeScatteringIntegration(cloudDensity, energy, stepSize, scattCoeff, absorCoeff, scatteredLuminance, trans);
 			transmittance = trans.x;  // Scattering and absorbtion are uniform, so just use one channel.
 
@@ -379,9 +404,13 @@ void RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> d
 		if (transmittance < 0.01f)
 			break;
 	}
+	
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	return loopCount;
+#endif
 }
 
-void RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> detailShapeNoiseTexture, StructuredBuffer<float3> atmosphereIrradiance,
+MARCH_RESULT RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> detailShapeNoiseTexture, StructuredBuffer<float3> atmosphereIrradiance,
 	Texture2D<float3> weatherTexture, Texture2D<float> geometryDepthTexture, Texture2D<float> blueNoiseTexture, Camera camera, float2 uv,
 	uint2 outputResolution, float3 direction, float3 sunDirection, float2 wind, float time, out float3 scatteredLuminance, out float transmittance,
 	out float depth)
@@ -439,7 +468,7 @@ void RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> det
 	else
 	{
 		// Outside of the cloud layer.
-		return;
+		return RETURN_EARLYOUT;
 	}
 
 	// Stop short if we hit the planet.
@@ -463,7 +492,7 @@ void RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> det
 
 	if (marchEnd <= marchStart)
 	{
-		return;
+		return RETURN_EARLYOUT;
 	}
 
 	// Offset the origin with blue noise to prevent banding artifacts. See: https://www.diva-portal.org/smash/get/diva2:1223894/FULLTEXT01.pdf
@@ -474,7 +503,13 @@ void RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> det
 	float rayOffset = blueNoiseTexture.Sample(pointWrap, blueNoiseSamplePos);
 	float jitter = rayOffset;  // Note: don't rescale to [-1, 1], as this could render participating media behind the camera.
 	
-	RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture, origin, direction, jitter, marchStart, marchEnd, sunDirection, wind, time, scatteredLuminance, transmittance, depth);
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+	return RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture, origin, direction,
+		jitter, marchStart, marchEnd, sunDirection, wind, time, scatteredLuminance, transmittance, depth);
+#else
+	RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture, origin, direction, jitter,
+		marchStart, marchEnd, sunDirection, wind, time, scatteredLuminance, transmittance, depth);
+#endif
 }
 
 #endif  // __CLOUDS_CORE_HLSLI__

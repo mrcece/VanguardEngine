@@ -148,7 +148,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	if (cloudsDepth < 1000000)
 	{
 		// Hit a cloud, need to apply the in-scattered light of the media over material behind it.
-		
+	
 		float4 cloudsCombined = cloudsScatteringTransmittanceTexture.Sample(bilinearClamp, uv);  // scat=0, trans=1 when no data available
 		float3 cloudsScattering = cloudsCombined.xyz;
 		float3 cloudsTransmittance = cloudsCombined.www;
@@ -159,6 +159,10 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		float3 cloudPosition = cameraPosition + rayDirection * depth;
 		lastDepth = depth;
 		
+#ifdef CLOUDS_DEBUG_MARCHCOUNT
+		// Debug render should not have aerial perspective applied.
+		finalColor = finalColor * cloudsTransmittance + cloudsScattering;
+#else	
 		// Compute the aerial perspective between the last depth position behind the cloud, and the cloud itself.
 		// Note that the shadowLength here is intentionally 0, as we don't care about the shadow behind the cloud, which
 		// is probably extremely small if not actually 0 anyways.
@@ -170,6 +174,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		
 		finalColor = finalColor * perspectiveTransmittance + perspectiveScattering;
 		finalColor = finalColor * cloudsTransmittance + cloudsScattering;
+#endif
 	}
 	
 	// Done composing intermediary volumetrics, now apply final aerial perspective on top.
