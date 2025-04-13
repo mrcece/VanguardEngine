@@ -1112,10 +1112,10 @@ void EditorUI::DrawAtmosphereControls(RenderDevice* device, entt::registry& regi
 			
 			CvarHelpers::Checkbox("renderLightShafts", "Render light shafts");
 			CvarHelpers::Slider("cloudRenderScale", "Render scale", 0.1f, 1.f);
-			CvarHelpers::Slider("cloudShadowRenderScale", "Shadow render scale", 0.1f, 1.f);
 
 			// Debug tools.
 			CvarHelpers::Checkbox("cloudDebugMarchCount", "Debug march count");
+			CvarHelpers::Checkbox("cloudDebugTransmittance", "Debug transmittance");
 			
 			ImGui::Separator();
 

@@ -143,9 +143,9 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 			}	
 		}
 	}
-	
+
 	// After solid geometry has been rendered as a background, compose volumetrics on top.
-	if (cloudsDepth < 1000000)
+	if (cloudsDepth < 1000000 && (!hitSurface || geometryDepth > cloudsDepth))
 	{
 		// Hit a cloud, need to apply the in-scattered light of the media over material behind it.
 	
@@ -159,9 +159,11 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		float3 cloudPosition = cameraPosition + rayDirection * depth;
 		lastDepth = depth;
 		
-#ifdef CLOUDS_DEBUG_MARCHCOUNT
-		// Debug render should not have aerial perspective applied.
+		// Debug rendering should not have aerial perspective applied.
+#if defined(CLOUDS_DEBUG_MARCHCOUNT)
 		finalColor = finalColor * cloudsTransmittance + cloudsScattering;
+#elif defined(CLOUDS_DEBUG_TRANSMITTANCE)
+		finalColor = cloudsTransmittance;
 #else	
 		// Compute the aerial perspective between the last depth position behind the cloud, and the cloud itself.
 		// Note that the shadowLength here is intentionally 0, as we don't care about the shadow behind the cloud, which

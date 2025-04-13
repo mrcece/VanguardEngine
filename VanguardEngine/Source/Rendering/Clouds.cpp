@@ -64,8 +64,8 @@ void Clouds::Initialize(RenderDevice* inDevice)
 
 	CvarCreate("cloudRayMarchQuality", "Controls the ray march quality of the clouds. Increasing quality degrades performance. 0=lowDetail, 1=default, 2=groundTruth", 1);
 	CvarCreate("cloudRenderScale", "Controls the render scale of the volumetric clouds", 0.25f);
-	CvarCreate("cloudShadowRenderScale", "Controls the render scale of the shadows and light shafts for clouds", 0.75f);
 	CvarCreate("cloudDebugMarchCount", "Debug cloud ray march steps", 0);
+	CvarCreate("cloudDebugTransmittance", "Debug cloud transmittance", 0);
 
 	weatherLayout = RenderPipelineLayout{}
 		.ComputeShader({ "Clouds/Weather", "Main" });
@@ -119,7 +119,7 @@ void Clouds::Initialize(RenderDevice* inDevice)
 
 	lastFrameScatteringUpscaled.id = 0;
 	lastFrameDepthUpscaled.id = 0;
-	lastFrameVisibility.id = 0;
+	lastFrameVisibilityUpscaled.id = 0;
 }
 
 CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, const Atmosphere& atmosphere, const RenderResource cameraBuffer, const RenderResource depthStencil, const RenderResource atmosphereIrradiance)
@@ -157,7 +157,6 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 	});
 
 	const float cloudRenderScale = *CvarGet("cloudRenderScale", float);
-	const float cloudShadowRenderScale = *CvarGet("cloudShadowRenderScale", float);
 
 	auto& cloudsPass = graph.AddPass("Clouds Pass", ExecutionQueue::Graphics);
 	const auto cloudOutput = cloudsPass.Create(TransientTextureDescription{
@@ -226,11 +225,7 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		bindData.cameraBuffer = resources.Get(cameraBuffer);
 		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
 		bindData.solarZenithAngle = solarZenithAngle;
-
-		static int time = 0;
-		time++;
-		bindData.timeSlice = time % 16;
-
+		bindData.timeSlice = Renderer::Get().GetAppFrame() % 16;
 		bindData.depthTexture = resources.Get(cloudDepth);
 		bindData.geometryDepthTexture = resources.Get(depthStencil);
 		bindData.blueNoiseTexture = resources.Get(blueNoiseTag);
@@ -249,88 +244,14 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 		list.DrawFullscreenQuad();
 	});
 
-	auto& upscalePass = graph.AddPass("Clouds Upscale Pass", ExecutionQueue::Compute);
-	const auto cloudOutputUpscaled = upscalePass.Create(TransientTextureDescription{
-		.width = 0,
-		.height = 0,
-		.depth = 1,
-		.resolutionScale = 1.f,
-		.format = DXGI_FORMAT_R16G16B16A16_FLOAT
-	}, VGText("Clouds upscaled scattering transmittance"));
-	const auto cloudDepthUpscaled = upscalePass.Create(TransientTextureDescription{
-		.width = 0,
-		.height = 0,
-		.depth = 1,
-		.resolutionScale = 1.f,
-		.format = DXGI_FORMAT_R32_FLOAT
-	}, VGText("Clouds upscaled depth"));
-	upscalePass.Read(cameraBuffer, ResourceBind::SRV);
-	upscalePass.Read(depthStencil, ResourceBind::SRV);
-	upscalePass.Read(cloudOutput, ResourceBind::SRV);
-	upscalePass.Read(cloudDepth, ResourceBind::SRV);
-	upscalePass.Read(lastFrameScatteringUpscaled, ResourceBind::SRV);
-	upscalePass.Read(lastFrameDepthUpscaled, ResourceBind::SRV);
-	upscalePass.Write(cloudOutputUpscaled, TextureView{}.UAV("", 0));
-	upscalePass.Write(cloudDepthUpscaled, TextureView{}.UAV("", 0));
-	upscalePass.Bind([this, cameraBuffer, depthStencil, cloudOutput, cloudDepth, oldUpscaled=lastFrameScatteringUpscaled,
-		oldDepthUpscaled=lastFrameDepthUpscaled, cloudOutputUpscaled, cloudDepthUpscaled]
-		(CommandList& list, RenderPassResources& resources)
-	{
-		auto upscaleLayout = RenderPipelineLayout{}
-			.ComputeShader({ "Clouds/Upscale", "Main" });
-
-		list.BindPipeline(upscaleLayout);
-
-		struct {
-			uint32_t cameraBuffer;
-			uint32_t cameraIndex;
-			uint32_t timeSlice;
-			uint32_t geometryDepthTexture;
-			uint32_t newScatteringTransmittanceTexture;
-			uint32_t newDepthTexture;
-			uint32_t oldScatteringTransmittanceTexture;
-			uint32_t oldDepthTexture;
-			uint32_t outputScatteringTransmittanceTexture;
-			uint32_t outputDepthTexture;
-		} bindData;
-
-		bindData.cameraBuffer = resources.Get(cameraBuffer);
-		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
-
-		static int time = 0;
-		time++;
-		bindData.timeSlice = time % 16;
-
-		bindData.geometryDepthTexture = resources.Get(depthStencil);
-		bindData.newScatteringTransmittanceTexture = resources.Get(cloudOutput);
-		bindData.newDepthTexture = resources.Get(cloudDepth);
-		bindData.oldScatteringTransmittanceTexture = 0;
-		if (oldUpscaled.id != 0)
-			bindData.oldScatteringTransmittanceTexture = resources.Get(oldUpscaled);
-		bindData.oldDepthTexture = 0;
-		if (oldDepthUpscaled.id != 0)
-			bindData.oldDepthTexture = resources.Get(oldDepthUpscaled);
-
-		bindData.outputScatteringTransmittanceTexture = resources.Get(cloudOutputUpscaled);
-		bindData.outputDepthTexture = resources.Get(cloudDepthUpscaled);
-
-		list.BindConstants("bindData", bindData);
-		
-		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(cloudOutputUpscaled));
-		const auto dispatchX = std::ceilf(outputComponent.description.width / 8.f);
-		const auto dispatchY = std::ceilf(outputComponent.description.height / 8.f);
-
-		list.Dispatch(dispatchX, dispatchY, 1);
-	});
-
 	auto visibilityEnabled = *CvarGet("renderLightShafts", int);
 
 	auto& visibilityPass = graph.AddPass("Clouds Sky Visibility Pass", ExecutionQueue::Compute, visibilityEnabled > 0);
-	const auto visibilityMapTag = visibilityPass.Create(TransientTextureDescription{
+	const auto cloudVisibility = visibilityPass.Create(TransientTextureDescription{
 		.width = 0,
 		.height = 0,
 		.depth = 1,
-		.resolutionScale = cloudShadowRenderScale,
+		.resolutionScale = cloudRenderScale,
 		.format = DXGI_FORMAT_R16_FLOAT
 	}, VGText("Clouds visibility map"));
 	visibilityPass.Read(cameraBuffer, ResourceBind::SRV);
@@ -339,11 +260,10 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 	visibilityPass.Read(depthStencil, ResourceBind::SRV);
 	visibilityPass.Read(blueNoiseTag, ResourceBind::SRV);
 	visibilityPass.Read(atmosphereIrradiance, ResourceBind::SRV);
-	visibilityPass.Read(lastFrameVisibility, ResourceBind::SRV);
-	visibilityPass.Write(visibilityMapTag, TextureView{}
+	visibilityPass.Write(cloudVisibility, TextureView{}
 		.UAV("", 0));
 	visibilityPass.Bind([this, cameraBuffer, weatherTag, baseShapeNoiseTag, depthStencil, blueNoiseTag, atmosphereIrradiance,
-		visibilityMapTag, solarZenithAngle, lastFrame=lastFrameVisibility](CommandList& list, RenderPassResources& resources)
+		cloudVisibility, solarZenithAngle](CommandList& list, RenderPassResources& resources)
 	{
 		auto visibilityLayout = RenderPipelineLayout{}
 			.ComputeShader({ "Clouds/Visibility", "Main" })
@@ -366,38 +286,120 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 			uint32_t cameraIndex;
 			float solarZenithAngle;
 			uint32_t timeSlice;
-			uint32_t lastFrameTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t blueNoiseTexture;
 			uint32_t atmosphereIrradianceBuffer;
-			float time;
+			uint32_t upscaledResolution[2];
 			XMFLOAT2 wind;
+			float time;
 		} bindData;
 
-		bindData.outputTexture = resources.Get(visibilityMapTag);
+		bindData.outputTexture = resources.Get(cloudVisibility);
 		bindData.weatherTexture = resources.Get(weatherTag);
 		bindData.baseShapeNoiseTexture = resources.Get(baseShapeNoiseTag);
 		bindData.cameraBuffer = resources.Get(cameraBuffer);
 		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
 		bindData.solarZenithAngle = solarZenithAngle;
-
-		static int time = 0;
-		time++;
-		bindData.timeSlice = time % 16;
-
-		bindData.lastFrameTexture = 0;
-		if (lastFrame.id != 0)
-			bindData.lastFrameTexture = resources.Get(lastFrame);
-
+		bindData.timeSlice = Renderer::Get().GetAppFrame() % 16;
 		bindData.geometryDepthTexture = resources.Get(depthStencil);
 		bindData.blueNoiseTexture = resources.Get(blueNoiseTag);
 		bindData.atmosphereIrradianceBuffer = resources.Get(atmosphereIrradiance);
+		bindData.upscaledResolution[0] = device->renderWidth;
+		bindData.upscaledResolution[1] = device->renderHeight;
 		bindData.wind = { windDirection.x * windStrength, windDirection.y * windStrength };
 		bindData.time = Renderer::Get().GetAppTime();
 
 		list.BindConstants("bindData", bindData);
 
-		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(visibilityMapTag));
+		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(cloudVisibility));
+		const auto dispatchX = std::ceilf(outputComponent.description.width / 8.f);
+		const auto dispatchY = std::ceilf(outputComponent.description.height / 8.f);
+
+		list.Dispatch(dispatchX, dispatchY, 1);
+	});
+
+	auto& upscalePass = graph.AddPass("Clouds Upscale Pass", ExecutionQueue::Compute);
+	const auto cloudOutputUpscaled = upscalePass.Create(TransientTextureDescription{
+		.width = 0,
+		.height = 0,
+		.depth = 1,
+		.resolutionScale = 1.f,
+		.format = DXGI_FORMAT_R16G16B16A16_FLOAT
+	}, VGText("Clouds upscaled scattering transmittance"));
+	const auto cloudDepthUpscaled = upscalePass.Create(TransientTextureDescription{
+		.width = 0,
+		.height = 0,
+		.depth = 1,
+		.resolutionScale = 1.f,
+		.format = DXGI_FORMAT_R32_FLOAT
+	}, VGText("Clouds upscaled depth"));
+	const auto cloudVisibilityUpscaled = upscalePass.Create(TransientTextureDescription{
+		.width = 0,
+		.height = 0,
+		.depth = 1,
+		.resolutionScale = 1.f,
+		.format = DXGI_FORMAT_R16_FLOAT
+	}, VGText("Clouds upscaled sky visibility"));
+	upscalePass.Read(cameraBuffer, ResourceBind::SRV);
+	upscalePass.Read(depthStencil, ResourceBind::SRV);
+	upscalePass.Read(cloudOutput, ResourceBind::SRV);
+	upscalePass.Read(cloudDepth, ResourceBind::SRV);
+	upscalePass.Read(cloudVisibility, ResourceBind::SRV);
+	upscalePass.Read(lastFrameScatteringUpscaled, ResourceBind::SRV);
+	upscalePass.Read(lastFrameDepthUpscaled, ResourceBind::SRV);
+	upscalePass.Read(lastFrameVisibilityUpscaled, ResourceBind::SRV);
+	upscalePass.Write(cloudOutputUpscaled, TextureView{}.UAV("", 0));
+	upscalePass.Write(cloudDepthUpscaled, TextureView{}.UAV("", 0));
+	upscalePass.Write(cloudVisibilityUpscaled, TextureView{}.UAV("", 0));
+	upscalePass.Bind([this, cameraBuffer, depthStencil, cloudOutput, cloudDepth, cloudVisibility, oldUpscaled=lastFrameScatteringUpscaled,
+		oldDepthUpscaled=lastFrameDepthUpscaled, oldVisibilityUpscaled=lastFrameVisibilityUpscaled, cloudOutputUpscaled,
+		cloudDepthUpscaled, cloudVisibilityUpscaled](CommandList& list, RenderPassResources& resources)
+	{
+		auto upscaleLayout = RenderPipelineLayout{}
+			.ComputeShader({ "Clouds/Upscale", "Main" });
+
+		list.BindPipeline(upscaleLayout);
+
+		struct {
+			uint32_t cameraBuffer;
+			uint32_t cameraIndex;
+			uint32_t timeSlice;
+			uint32_t geometryDepthTexture;
+			uint32_t newScatteringTransmittanceTexture;
+			uint32_t newDepthTexture;
+			uint32_t newVisibilityTexture;
+			uint32_t oldScatteringTransmittanceTexture;
+			uint32_t oldDepthTexture;
+			uint32_t oldVisibilityTexture;
+			uint32_t outputScatteringTransmittanceTexture;
+			uint32_t outputDepthTexture;
+			uint32_t outputVisibilityTexture;
+		} bindData;
+
+		bindData.cameraBuffer = resources.Get(cameraBuffer);
+		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
+		bindData.timeSlice = Renderer::Get().GetAppFrame() % 16;
+		bindData.geometryDepthTexture = resources.Get(depthStencil);
+		bindData.newScatteringTransmittanceTexture = resources.Get(cloudOutput);
+		bindData.newDepthTexture = resources.Get(cloudDepth);
+		bindData.newVisibilityTexture = resources.Get(cloudVisibility);
+		bindData.oldScatteringTransmittanceTexture = 0;
+		if (oldUpscaled.id != 0)
+			bindData.oldScatteringTransmittanceTexture = resources.Get(oldUpscaled);
+		bindData.oldDepthTexture = 0;
+		if (oldDepthUpscaled.id != 0)
+			bindData.oldDepthTexture = resources.Get(oldDepthUpscaled);
+		bindData.oldVisibilityTexture = 0;
+		if (oldVisibilityUpscaled.id != 0)
+			bindData.oldVisibilityTexture = resources.Get(oldVisibilityUpscaled);
+
+		bindData.outputScatteringTransmittanceTexture = resources.Get(cloudOutputUpscaled);
+		bindData.outputDepthTexture = resources.Get(cloudDepthUpscaled);
+		bindData.outputVisibilityTexture = resources.Get(cloudVisibilityUpscaled);
+
+		list.BindConstants("bindData", bindData);
+		
+		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(cloudOutputUpscaled));
 		const auto dispatchX = std::ceilf(outputComponent.description.width / 8.f);
 		const auto dispatchY = std::ceilf(outputComponent.description.height / 8.f);
 
@@ -406,7 +408,7 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 
 	lastFrameScatteringUpscaled = cloudOutputUpscaled;
 	lastFrameDepthUpscaled = cloudDepthUpscaled;
-	lastFrameVisibility = visibilityMapTag;
+	lastFrameVisibilityUpscaled = cloudVisibilityUpscaled;
 
-	return { cloudOutputUpscaled, cloudDepthUpscaled, visibilityMapTag, weatherTag };
+	return { cloudOutputUpscaled, cloudDepthUpscaled, cloudVisibilityUpscaled, weatherTag };
 }

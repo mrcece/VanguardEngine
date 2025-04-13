@@ -668,11 +668,18 @@ void Renderer::Render(entt::registry& registry)
 	device->AdvanceGPU();
 
 	Editor::Get().Update();
+
+	appFrame++;
 }
 
 double Renderer::GetAppTime() const
 {
 	return appTime;
+}
+
+uint32_t Renderer::GetAppFrame() const
+{
+	return appFrame;
 }
 
 std::pair<uint32_t, uint32_t> Renderer::GetResolution() const

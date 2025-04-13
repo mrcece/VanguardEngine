@@ -61,9 +61,8 @@ float4 PSMain(PixelIn input) : SV_Target
 	// Get the UV coordinates that are top-left aligned.
 	float2 alignedUv = floor(input.uv * bindData.outputResolution) / float2(bindData.outputResolution);
 
-	// Jitter the UV coordinates for temporal accumulation. Note that this is only used for the ray direction,
-	// nothing else, otherwise the output coordinates would be wrong. Doesn't have a meaningful impact on the blue
-	// noise offset. Note that the jitter uses the upscaled resolution, not the low resolution.
+	// Jitter the UV coordinates for temporal accumulation. This is used to offset the raymarch, but not the output
+	// coordinates, which would be wrong then. Note that the jitter uses the upscaled resolution, not the low resolution.
 	float2 jitteredUv = JitterUv(alignedUv, bindData.upscaledResolution, bindData.timeSlice);
 	
 	float3 sunDirection = float3(sin(bindData.solarZenithAngle), 0.f, cos(bindData.solarZenithAngle));
@@ -86,11 +85,11 @@ float4 PSMain(PixelIn input) : SV_Target
 	float depth;  // Kilometers.
 #ifdef CLOUDS_DEBUG_MARCHCOUNT
 	int stepCount = RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
-		geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
+		geometryDepthTexture, blueNoiseTexture, camera, input.uv, jitteredUv, bindData.outputResolution, rayDirection,
 		sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
 #else
 	RayMarchClouds(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture,
-		geometryDepthTexture, blueNoiseTexture, camera, input.uv, bindData.outputResolution, rayDirection,
+		geometryDepthTexture, blueNoiseTexture, camera, input.uv, jitteredUv, bindData.outputResolution, rayDirection,
 		sunDirection, bindData.wind, bindData.time, scatteredLuminance, transmittance, depth);
 #endif
 

@@ -3,6 +3,7 @@
 #include "RootSignature.hlsli"
 #include "Constants.hlsli"
 #include "Camera.hlsli"
+#include "Reprojection.hlsli"
 #include "Atmosphere/Atmosphere.hlsli"
 #include "Clouds/Core.hlsli"
 
@@ -15,20 +16,20 @@ struct BindData
 	uint cameraIndex;
 	float solarZenithAngle;
 	uint timeSlice;
-	uint lastFrameTexture;
 	uint geometryDepthTexture;
 	uint blueNoiseTexture;
 	uint atmosphereIrradianceBuffer;
-	float time;
+	uint2 upscaledResolution;
 	float2 wind;
+	float time;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
 
-float RayMarch(Camera camera, float2 uv, uint width, uint height)
+float RayMarch(Camera camera, float2 baseUv, float2 jitteredUv, uint width, uint height)
 {	
 	float3 sunDirection = float3(sin(bindData.solarZenithAngle), 0.f, cos(bindData.solarZenithAngle));
-	float3 rayDirection = ComputeRayDirection(camera, uv);
+	float3 rayDirection = ComputeRayDirection(camera, jitteredUv);
 
 	Texture3D<float> baseShapeNoiseTexture = ResourceDescriptorHeap[bindData.baseShapeNoiseTexture];
 	Texture3D<float> detailShapeNoiseTexture;  // Null texture.
@@ -66,7 +67,8 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 	marchEnd = max(0, marchEnd);
 	
 	// Early out of the march if we hit opaque geometry.
-	float geometryDepth = geometryDepthTexture.Sample(bilinearClamp, uv);
+	// Using the base UV instead of jittered provides slightly better edges around geometry.
+	float geometryDepth = geometryDepthTexture.Sample(bilinearClamp, baseUv);
 	geometryDepth = LinearizeDepth(camera, geometryDepth) * camera.farPlane;
 	if (geometryDepth < camera.farPlane)
 	{
@@ -83,10 +85,13 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 	
 	uint blueNoiseWidth, blueNoiseHeight;
 	blueNoiseTexture.GetDimensions(blueNoiseWidth, blueNoiseHeight);
-	float2 blueNoiseSamplePos = uv * uint2(width, height);
+	const float upscaleResolutionMultiplier = 4.f;
+	// Sample blue noise at one pixel per upscaled sample, so scale the coordinates by the resolution scale.
+	float2 blueNoiseSamplePos = jitteredUv * uint2(width, height) * upscaleResolutionMultiplier;
 	blueNoiseSamplePos = blueNoiseSamplePos / float2(blueNoiseWidth, blueNoiseHeight);
 	float rayOffset = blueNoiseTexture.Sample(pointWrap, blueNoiseSamplePos);
 	float jitter = (rayOffset - 0.5f) * 2.f;  // Rescale to [-1, 1]
+	jitter *= 0.5;
 	
 	// #TODO: jittering this is a bit of a bandaid, producing a very stochastic output and relying on blurring to
 	// resolve the output. Should improve the underlying rendering here.
@@ -162,7 +167,7 @@ float RayMarch(Camera camera, float2 uv, uint width, uint height)
 [numthreads(8, 8, 1)]
 void Main(uint3 dispatchId : SV_DispatchThreadID)
 {
-	RWTexture2D<float2> outputTexture = ResourceDescriptorHeap[bindData.outputTexture];
+	RWTexture2D<float> outputTexture = ResourceDescriptorHeap[bindData.outputTexture];
 	
 	uint width, height;
 	outputTexture.GetDimensions(width, height);
@@ -174,40 +179,12 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	Camera camera = cameraBuffer[bindData.cameraIndex];
 	
 	float2 uv = (dispatchId.xy + 0.5.xx) / float2(width, height);
+	// Get the UV coordinates that are top-left aligned.
+	float2 alignedUv = floor(uv * uint2(width, height)) / float2(width, height);
+	// Jitter the UV coordinates for temporal accumulation.
+	float2 jitteredUv = JitterUv(alignedUv, bindData.upscaledResolution, bindData.timeSlice);
 	
-	static const uint crossFilter[] = {
-		0, 8, 2, 10,
-		12, 4, 14, 6,
-		3, 11, 1, 9,
-		15, 7, 13, 5
-	};
+	float shadowLength = RayMarch(camera, uv, jitteredUv, width, height);
 	
-	float shadowLength = 0.f;
-	
-	int index = (dispatchId.x + 4 * dispatchId.y) % 16;
-#ifdef CLOUDS_FULL_RESOLUTION
-	if (true)
-#else
-	if (index == crossFilter[bindData.timeSlice])
-#endif
-	{
-		shadowLength = RayMarch(camera, uv, width, height);
-	}
-	
-#ifndef CLOUDS_FULL_RESOLUTION
-	else
-	{
-		// #TODO: reproject uvs
-		
-		Texture2D<float> lastFrameTexture = ResourceDescriptorHeap[bindData.lastFrameTexture];
-		
-		if (bindData.lastFrameTexture != 0)
-		{
-			float lastFrame = lastFrameTexture.Sample(downsampleBorder, uv);
-			shadowLength = lastFrame;
-		}
-	}
-#endif
-	
-	outputTexture[dispatchId.xy] = float2(shadowLength, 0);
+	outputTexture[dispatchId.xy] = shadowLength;
 }

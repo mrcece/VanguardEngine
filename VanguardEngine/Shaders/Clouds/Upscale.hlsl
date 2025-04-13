@@ -12,10 +12,13 @@ struct BindData
 	uint geometryDepthTexture;
 	uint newScatteringTransmittanceTexture;
 	uint newDepthTexture;
+	uint newVisibilityTexture;
 	uint oldScatteringTransmittanceTexture;
 	uint oldDepthTexture;
+	uint oldVisibilityTexture;
 	uint outputScatteringTransmittanceTexture;
 	uint outputDepthTexture;
+	uint outputVisibilityTexture;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
@@ -50,12 +53,15 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	// Low resolution renders from the current frame.
 	Texture2D<float4> newScatTransTexture = ResourceDescriptorHeap[bindData.newScatteringTransmittanceTexture];
 	Texture2D<float> newDepthTexture = ResourceDescriptorHeap[bindData.newDepthTexture];
+	Texture2D<float> newVisibilityTexture = ResourceDescriptorHeap[bindData.newVisibilityTexture];
 	// Upscaled renders from previous frames.
 	Texture2D<float4> oldScatTransTexture = ResourceDescriptorHeap[bindData.oldScatteringTransmittanceTexture];
 	Texture2D<float> oldDepthTexture = ResourceDescriptorHeap[bindData.oldDepthTexture];
+	Texture2D<float> oldVisibilityTexture = ResourceDescriptorHeap[bindData.oldVisibilityTexture];
 	// Upscaled outputs for the current frame.
 	RWTexture2D<float4> outputScatTransTexture = ResourceDescriptorHeap[bindData.outputScatteringTransmittanceTexture];
 	RWTexture2D<float> outputDepthTexture = ResourceDescriptorHeap[bindData.outputDepthTexture];
+	RWTexture2D<float> outputVisibilityTexture = ResourceDescriptorHeap[bindData.outputVisibilityTexture];
 	
 	Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
 	
@@ -77,10 +83,15 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	
 	float4 newScatTrans = newScatTransTexture[lowResSampleCoords];
 	float newDepth = newDepthTexture[lowResSampleCoords];
+	float newVisibility;  // Not doing a simple point sample for this.
 	
 	// UV coordinates are centered on the middle of the pixel, not the aligned corner.
 	float2 newUv = (dispatchId.xy + 0.5.xx) / float2(width, height);
+	// #TODO: oldUv is having some issues, maybe precision issues? Crazy motion smears happens on some pixels when not moving.
 	float2 oldUv = ReprojectUv(camera, newUv, newDepth);
+	
+	// Perform a bilinear blur while sampling the visibility texture to denoise a bit.
+	newVisibility = newVisibilityTexture.Sample(bilinearClamp, newUv);
 	
 	// With the reprojected UV coordinates, sample the last frames upscaled data.
 	float4 oldScatTrans = oldScatTransTexture.Sample(pointClamp, oldUv);
@@ -111,6 +122,9 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	// Assume only sampling from the current frame render.
 	float4 finalScatTrans = newScatTrans;
 	float finalDepth = newDepth;
+	float finalVisibility = newVisibility;
+	
+	float blendWeight = JitterAlignedPixel(newUv, uint2(width, height), bindData.timeSlice);
 	
 	if (!reject)
 	{
@@ -121,11 +135,17 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		
 		// Finally, blend together. The clipping work may get entirely discarded if the pixel is not jitter aligned,
 		// but oh well.
-		float blendWeight = JitterAlignedPixel(newUv, uint2(width, height), bindData.timeSlice);
 		finalScatTrans = lerp(newScatTrans, clippedScatTrans, blendWeight);
 		finalDepth = lerp(newDepth, clippedDepth, blendWeight);
 	}
 	
+	// Handle visibility upscale last, as we don't have depth information (nor is it very relevant), so perform
+	// a simple temporal reproject of it. In addition, the history rejection rules for this are different.
+	float2 oldUvDepthless = ReprojectUv(camera, newUv, 10000);
+	float oldVisibility = oldVisibilityTexture.Sample(pointClamp, oldUvDepthless);
+	finalVisibility = lerp(newVisibility, oldVisibility, blendWeight);
+	
 	outputScatTransTexture[dispatchId.xy] = finalScatTrans;
 	outputDepthTexture[dispatchId.xy] = finalDepth;
+	outputVisibilityTexture[dispatchId.xy] = finalVisibility;
 }

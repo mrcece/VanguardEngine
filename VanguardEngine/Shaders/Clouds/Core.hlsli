@@ -114,8 +114,8 @@ float SampleCloudDensity(Texture2D<float3> weatherTexture, Texture3D<float> base
 		finalShape = RemapRange(finalShape, detailShape * 0.2, 1.0, 0.0, 1.0);
 	}
 
-	const float densityMultiplier = 0.5;
-
+	const float densityMultiplier = 2.416;
+	
 	return max(finalShape, 0) * densityMultiplier;  // #TODO: Should be able to remove the max.
 }
 
@@ -211,8 +211,11 @@ float ComputeLightEnergy(Texture2D<float3> weatherTexture, Texture3D<float> base
 	// Sample the mean density at the sample position using a higher mip level.
 	// #TODO: We might be able to get away with not using the full density sample, try just applying coverage and height gradient?
 	float localDensity = SampleCloudDensity(weatherTexture, baseNoise, detailNoise, position, wind, time, false, 2);
+	
+	// Restrict the minimum local density, otherwise very thin edges will have nearly 0 density and thus no in scattering light.
+	localDensity += 2;
 
-	const float outScatter = ComputeBeersLaw(densityToLight * 2.5, absorption);
+	const float outScatter = ComputeBeersLaw(densityToLight * 0.8, absorption);
 	const float phase = ComputePhaseFunction(viewDotLight);
 	const float inScatter = ComputeInScatterProbability(localDensity, GetHeightFractionForPoint(position, float2(cloudLayerBottom, cloudLayerTop)));
 
@@ -247,18 +250,16 @@ MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<
 	
 	// Low detail reduces step count as well.
 #ifndef CLOUDS_LOW_DETAIL
-	const int baseStepCount = 160;
+	const int baseStepCount = 150;
 	const float smallStepMultiplier = 0.2;
 #else
-	const int baseStepCount = 20;
+	const int baseStepCount = 14;
 	const float smallStepMultiplier = 0.35;
 #endif
 
-	const int steps = (baseStepCount - (baseStepCount * 0.5 * zDot));  // half at zenith, baseStepCount at horizon.
+	const int steps = (baseStepCount - (baseStepCount * 0.4 * zDot));  // Slightly more than half at zenith, baseStepCount at horizon.
 	const float marchWidth = marchEnd - marchStart;
-
-	// #TODO: Tweak this some more to reduce artifacts without increasing step counts.
-	float largeStepSize = 0.2f + 0.5f * (marchWidth / (float)steps);
+	float largeStepSize = lerp(0.2f, 0.12f, zDot) + 0.5f * (marchWidth / (float)steps);
 	float smallStepSize = largeStepSize * smallStepMultiplier;
 	const int stepTransitionMargin = 6;
 	
@@ -278,8 +279,8 @@ MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<
 #ifdef CLOUDS_MARCH_GROUND_TRUTH_DETAIL
 	// Marching in ground truth detail is very expensive, especially for shadow mapping when the sun is low in the sky.
 
-	// Fixed size steps that are fairly small for extra detail.
-	largeStepSize = 0.2f;
+	// Fixed size steps that are very small for extra detail.
+	largeStepSize = 0.08f;
 	smallStepSize = largeStepSize * smallStepMultiplier;
 
 	for (int i = 0; dist < marchWidth; ++i)
@@ -353,16 +354,19 @@ MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<
 			// The approximate unattenuated energy hitting the clouds is the full combined sun and sky irradiance.
 			// Note that sun/sky visibility is NOT used here, as the clouds are the ones blocking the light from the atmosphere.
 			float3 energy = sunIrradiance + skyIrradiance;
-			energy *= lightEnergy * 0.18;  // Attenuate the atospheric irradiance by the cloud lighting model.
-
-			float stepSize = smallStepSize * 1000.0;  // Kilometers to meters.
+			energy *= lightEnergy * 0.248;  // Attenuate the atmospheric irradiance by the cloud lighting model.
+			
+			//float stepSize = smallStepSize * 1000.0;  // Kilometers to meters.
+			// Don't perform a physically accurate scattering integration, as numerical precision issues are happening.
+			// Instead, a bit of artistic license is leveraged here.
+			float stepSize = smallStepSize * 200;
 
 			// Coefficients try to approximate real cloud behavior. Multiple sources were used to derive these numbers,
 			// but I did not do an extensive read into any of them and instead I'm using a bit of artistic license here.
 			// References:
 			// 0.05: http://www.patarnott.com/satsens/pdf/opticalPropertiesCloudsReview.pdf
-			// 0.026: https://amt.copernicus.org/articles/14/4959/2021/
-			float3 scattCoeff = 0.026.xxx;
+			// 0.026: https://amt.copernicus.org/articles/14/4959/2021
+			float3 scattCoeff = 0.124.xxx;
 			float3 absorCoeff = 0.xxx;  // Cloud albedo ~= 1.
 			float3 trans = transmittance.xxx;
 #ifdef CLOUDS_LOW_DETAIL
@@ -411,7 +415,7 @@ MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<
 }
 
 MARCH_RESULT RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<float> detailShapeNoiseTexture, StructuredBuffer<float3> atmosphereIrradiance,
-	Texture2D<float3> weatherTexture, Texture2D<float> geometryDepthTexture, Texture2D<float> blueNoiseTexture, Camera camera, float2 uv,
+	Texture2D<float3> weatherTexture, Texture2D<float> geometryDepthTexture, Texture2D<float> blueNoiseTexture, Camera camera, float2 baseUv, float2 jitteredUv,
 	uint2 outputResolution, float3 direction, float3 sunDirection, float2 wind, float time, out float3 scatteredLuminance, out float transmittance,
 	out float depth)
 {
@@ -434,7 +438,7 @@ MARCH_RESULT RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<fl
 	// since the sun will never have a Y component to its vector.
 	const float3 planeA = float3(0.f, 1.f, 0.f);
 	const float3 planeB = cross(direction, planeA);
-	const float2 uvScaled = uv * 2.0 - 1.0;
+	const float2 uvScaled = jitteredUv * 2.0 - 1.0;
 
 	// Not sure why the 0.5 is needed.. oh well
 	origin += uvScaled.x * -planeA * CLOUDS_ORTHOGRAPHIC_SCALE * 0.5f;
@@ -482,7 +486,9 @@ MARCH_RESULT RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<fl
 	marchEnd = max(0, marchEnd);
 
 	// Early out of the march if we hit opaque geometry.
-	float geometryDepth = geometryDepthTexture.Sample(bilinearClamp, uv);
+	// Note the use of the minimum filter, which provides a more conservative rendering against the geometry mask, to prevent a thin
+	// border of unrendered clouds appearing around geometry.
+	float geometryDepth = geometryDepthTexture.Sample(linearMipPointClampMinimum, jitteredUv);
 	geometryDepth = LinearizeDepth(camera, geometryDepth) * camera.farPlane;
 	if (geometryDepth < camera.farPlane)
 	{
@@ -498,10 +504,17 @@ MARCH_RESULT RayMarchClouds(Texture3D<float> baseShapeNoiseTexture, Texture3D<fl
 	// Offset the origin with blue noise to prevent banding artifacts. See: https://www.diva-portal.org/smash/get/diva2:1223894/FULLTEXT01.pdf
 	uint blueNoiseWidth, blueNoiseHeight;
 	blueNoiseTexture.GetDimensions(blueNoiseWidth, blueNoiseHeight);
-	float2 blueNoiseSamplePos = uv * outputResolution;
+	const float upscaleResolutionMultiplier = 4.f;
+	// Sample blue noise at one pixel per upscaled sample, so scale the coordinates by the resolution scale.
+	float2 blueNoiseSamplePos = jitteredUv * outputResolution * upscaleResolutionMultiplier;
 	blueNoiseSamplePos = blueNoiseSamplePos / float2(blueNoiseWidth, blueNoiseHeight);
 	float rayOffset = blueNoiseTexture.Sample(pointWrap, blueNoiseSamplePos);
 	float jitter = rayOffset;  // Note: don't rescale to [-1, 1], as this could render participating media behind the camera.
+	
+#ifdef CLOUDS_LOW_DETAIL
+	// Low detail clouds cannot afford a well-jittered sample.
+	jitter *= 0.4;
+#endif
 	
 #ifdef CLOUDS_DEBUG_MARCHCOUNT
 	return RayMarchInternal(baseShapeNoiseTexture, detailShapeNoiseTexture, atmosphereIrradiance, weatherTexture, origin, direction,

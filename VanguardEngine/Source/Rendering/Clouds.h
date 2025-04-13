@@ -50,7 +50,7 @@ private:
 
 	RenderResource lastFrameScatteringUpscaled;
 	RenderResource lastFrameDepthUpscaled;
-	RenderResource lastFrameVisibility;
+	RenderResource lastFrameVisibilityUpscaled;
 
 	void GenerateWeather(CommandList& list, uint32_t weatherTexture);
 	void GenerateNoise(CommandList& list, uint32_t baseShapeTexture, uint32_t detailShapeTexture);
