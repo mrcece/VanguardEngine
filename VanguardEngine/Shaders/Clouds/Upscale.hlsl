@@ -133,10 +133,28 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		float4 clippedScatTrans = NeighborhoodClampFilter(oldScatTrans, newScatTransTexture, lowResSampleCoords);
 		float clippedDepth = NeighborhoodClampFilter(oldDepth, newDepthTexture, lowResSampleCoords);
 		
+		// Unfortunately, just using the neighborhood clamped sample is not so simple.
+		// Consider the situation of a small patch of clouds very far away, such that it only occupies a couple of subpixels
+		// in the low resolution output. Since the ray directions get jittered, some of the upscaled pixels will sample
+		// that region of clouds, while others will not, resulting in bits of cloud that flicker, as they only appear in
+		// in some time slices. For the neighborhood clamping to work properly here, it would have to sample the middle
+		// subpixel to fetch the "real" information for that region, but this would require doubling the cloud rendering!
+		// As a result, hack it a bit and only apply the neighborhood clipping while movement is happening to hide this
+		// temporal artifacts, but when the camera is still, just do a simple pass through. No need to neighborhood clip
+		// during no motion anyways.
+		float4 correctedScatTrans = clippedScatTrans;
+		float correctedDepth = clippedDepth;
+		float2 uvDelta = newUv - oldUv;
+		if (uvDelta.x * uvDelta.x + uvDelta.y * uvDelta.y < 0.000001 && all(abs(camera.lastFramePosition.xyz - camera.position.xyz) < 0.01))
+		{
+			correctedScatTrans = oldScatTrans;
+			correctedDepth = oldDepth;
+		}
+		
 		// Finally, blend together. The clipping work may get entirely discarded if the pixel is not jitter aligned,
 		// but oh well.
-		finalScatTrans = lerp(newScatTrans, clippedScatTrans, blendWeight);
-		finalDepth = lerp(newDepth, clippedDepth, blendWeight);
+		finalScatTrans = lerp(newScatTrans, correctedScatTrans, blendWeight);
+		finalDepth = lerp(newDepth, correctedDepth, blendWeight);
 	}
 	
 	// Handle visibility upscale last, as we don't have depth information (nor is it very relevant), so perform
