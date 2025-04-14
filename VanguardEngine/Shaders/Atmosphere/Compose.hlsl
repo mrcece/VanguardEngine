@@ -65,11 +65,13 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 #if defined(RENDER_LIGHT_SHAFTS) && (RENDER_LIGHT_SHAFTS > 0)
 	shadowLength = cloudsVisibilityTexture.Sample(bilinearClamp, uv);
 	
-	// Clouds don't completely block the light, so scale the shadow length accordingly.
-	shadowLength *= 0.5f;
+	// Soften the shadows a bit, except when looking at the sun. Shadows cast by clouds when looking at the sun
+	// should be more dramatic to make the effect obvious.
+	const float muS = dot(rayDirection, sunDirection);
+	shadowLength *= 0.5 * smoothstep(0.85, 1.0, muS) + 0.5;
 	
 	// Hack the light shadows to fade in when the sun is at the horizon.
-	float lightshaftFadeHack = smoothstep(0.02, 0.04, dot(normalize(cameraPosition - planetCenter), sunDirection));
+	float lightshaftFadeHack = smoothstep(0.01, 0.04, dot(normalize(cameraPosition - planetCenter), sunDirection));
 	shadowLength = max(0.f, shadowLength * lightshaftFadeHack);
 #endif
 	
