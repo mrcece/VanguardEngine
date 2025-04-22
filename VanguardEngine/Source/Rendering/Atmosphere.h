@@ -57,6 +57,7 @@ struct AtmosphereData
 
 struct AtmosphereResources
 {
+	RenderResource modelHandle;
 	RenderResource transmittanceHandle;
 	RenderResource scatteringHandle;
 	RenderResource irradianceHandle;
@@ -89,6 +90,10 @@ private:
 	RenderPipelineLayout multipleScatteringPrecomputeLayout;
 
 	void Precompute(CommandList& list, TextureHandle transmittanceHandle, TextureHandle scatteringHandle, TextureHandle irradianceHandle);
+
+	// Storing the atmosphere model data in root descriptors is too expensive and doesn't leave sufficient space for other data,
+	// so cache it in a buffer and pass that around instead.
+	BufferHandle modelBuffer;
 
 	RenderPipelineLayout separableIrradianceLayout;
 

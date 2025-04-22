@@ -8,12 +8,13 @@
 
 struct BindData
 {
-	AtmosphereData atmosphere;
 	uint cameraBuffer;
 	uint cameraIndex;
+	uint atmosphereBuffer;
 	uint cloudsScatteringTransmittanceTexture;
 	uint cloudsDepthTexture;
 	uint cloudsVisibilityTexture;
+	uint cloudsCirrusTexture;
 	uint geometryDepthTexture;
 	uint outputTexture;
 	uint transmissionTexture;
@@ -21,18 +22,64 @@ struct BindData
 	uint irradianceTexture;
 	float solarZenithAngle;
 	float globalWeatherCoverage;
+	float2 wind;
+	float time;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
+
+float3 SampleCirrusClouds(Texture2D<float4> cirrusTexture, float3 planetCenter, float3 cameraPosition, float3 rayDirection, out float3 hitPosition)
+{
+	// Cirrus clouds are in the range of 15k-30k feet. So pick a nice value in the middle.
+	const float cirrusHeight = 6705.f / 1000.f;
+	
+	hitPosition = 0.xxx;
+	
+	const float planetRadius = 6360.0;
+	float2 topBoundaryIntersect;
+	if (!RaySphereIntersection(cameraPosition, rayDirection, planetCenter, planetRadius + cirrusHeight, topBoundaryIntersect))
+	{
+		// Outside the cirrus layer.
+		return 0.xxx;
+	}
+	
+	float distanceToLayer = topBoundaryIntersect.y;
+	hitPosition = rayDirection * distanceToLayer + cameraPosition;
+	
+	// Convert the hit position to global space instead of in atmosphere-local space, otherwise the spherical
+	// coordinates will not be correct. Note that the returned hit position is local space, so that the distance through
+	// the atmosphere is correct.
+	float3 hitGlobalSpace = hitPosition + planetCenter;
+	
+	// Convert the cartesian direction to normalized spherical coordinates.
+	// Note that the X axis is used as the polar axis, instead of Z to focus spherical distortion towards the horizon,
+	// instead of straight up.
+	const float radius = length(hitGlobalSpace);
+	const float theta = atan(hitGlobalSpace.y / hitGlobalSpace.z);
+	const float phi = acos(hitGlobalSpace.x / radius);
+	
+	const float uvScale = 120.f;
+	float2 uv = float2(-phi * uvScale, -theta * uvScale);
+	
+	// Apply wind by scrolling the UV coordinates. Wind tends to move faster as you get higher in the atmosphere,
+	// so scale faster than the rest of the clouds.
+	uv += bindData.wind * bindData.time * 0.038;
+	
+	float opacityScale = smoothstep(0.f, 0.4f, bindData.globalWeatherCoverage);
+	
+	return cirrusTexture.Sample(bilinearWrap, uv).aaa * opacityScale;
+}
 
 [RootSignature(RS)]
 [numthreads(8, 8, 1)]
 void Main(uint3 dispatchId : SV_DispatchThreadID)
 {
 	StructuredBuffer<Camera> cameraBuffer = ResourceDescriptorHeap[bindData.cameraBuffer];
+	StructuredBuffer<AtmosphereData> atmosphereBuffer = ResourceDescriptorHeap[bindData.atmosphereBuffer];
 	Texture2D<float4> cloudsScatteringTransmittanceTexture = ResourceDescriptorHeap[bindData.cloudsScatteringTransmittanceTexture];
 	Texture2D<float> cloudsDepthTexture = ResourceDescriptorHeap[bindData.cloudsDepthTexture];
 	Texture2D<float> cloudsVisibilityTexture = ResourceDescriptorHeap[bindData.cloudsVisibilityTexture];
+	Texture2D<float4> cloudsCirrusTexture = ResourceDescriptorHeap[bindData.cloudsCirrusTexture];
 	Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
 	RWTexture2D<float4> outputTexture = ResourceDescriptorHeap[bindData.outputTexture];
 
@@ -47,6 +94,9 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 
 	Camera camera = cameraBuffer[bindData.cameraIndex];
 	Camera sunCamera = cameraBuffer[2];  // #TODO: Remove this terrible hardcoding.
+	
+	AtmosphereData atmosphere = atmosphereBuffer[0];
+	
 	float2 uv = (dispatchId.xy + 0.5.xx) / float2(width, height);
 	
 	float geometryDepth = geometryDepthTexture[dispatchId.xy];
@@ -57,7 +107,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	float3 sunDirection = float3(sin(bindData.solarZenithAngle), 0.f, cos(bindData.solarZenithAngle));
 	float3 rayDirection = ComputeRayDirection(camera, uv);
 	float3 cameraPosition = ComputeAtmosphereCameraPosition(camera);
-	float3 planetCenter = ComputeAtmospherePlanetCenter(bindData.atmosphere);
+	float3 planetCenter = ComputeAtmospherePlanetCenter(atmosphere);
 	
 	bool hitPlanet = false;
 	float shadowLength = 0.f;
@@ -108,15 +158,16 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 			float3 hitPosition = cameraPosition + rayDirection * intersectionDistance;
 			lastDepth = intersectionDistance;
 			float3 surfaceNormal = normalize(hitPosition - planetCenter);
-		
+			
 			float3 sunIrradiance;
 			float3 skyIrradiance;
-			GetSunAndSkyIrradiance(bindData.atmosphere, transmittanceLut, irradianceLut, bilinearWrap, hitPosition - planetCenter, surfaceNormal, sunDirection, sunIrradiance, skyIrradiance);
+			GetSunAndSkyIrradiance(atmosphere, transmittanceLut, irradianceLut, bilinearWrap, hitPosition - planetCenter, surfaceNormal, sunDirection, sunIrradiance, skyIrradiance);
 		
+			// The irradiance on the planet surface is heavily influenced by visibility.
 			float sunVisibility = CalculateSunVisibility(hitPosition, sunCamera /*, ResourceDescriptorHeap[bindData.cloudsShadowMap]*/);
 			float skyVisibility = CalculateSkyVisibility(hitPosition, bindData.globalWeatherCoverage);
 			
-			float3 radiance = bindData.atmosphere.surfaceColor * (1.f / pi) * ((sunIrradiance * sunVisibility) + (skyIrradiance * skyVisibility));
+			float3 radiance = atmosphere.surfaceColor * (1.f / pi) * ((sunIrradiance * sunVisibility) + (skyIrradiance * skyVisibility));
 			finalColor = radiance * atmosphereRadianceExposure;
 			
 			hitPlanet = true;
@@ -124,7 +175,22 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		
 		else
 		{
-			// Didn't hit the planet, but if the view ray intersects the sun disk, add the direct radiance of the sun on top.
+			// Didn't hit the planet, use the cirrus cloud layer as the background.
+			float3 hitPosition;
+			finalColor = SampleCirrusClouds(cloudsCirrusTexture, planetCenter, cameraPosition, rayDirection, hitPosition);
+			lastDepth = length(hitPosition) - 0.00001;  // Subtract a small number so that no hit corresponds with a negative depth.
+			
+			// Using the sun direction as the normal vector causes artifacts when the sun is setting.
+			float3 surfaceNormal = float3(0, 0, 1);
+			
+			float3 sunIrradiance;
+			float3 skyIrradiance;
+			GetSunAndSkyIrradiance(atmosphere, transmittanceLut, irradianceLut, bilinearWrap, hitPosition - planetCenter, surfaceNormal, sunDirection, sunIrradiance, skyIrradiance);
+			
+			// The irradiance on the cirrus clouds is not impacted by visibility, so skip that computation.
+			finalColor *= (sunIrradiance + skyIrradiance);
+			
+			// If the view ray intersects the sun disk, add the direct radiance of the sun on top.
 			if (dot(rayDirection, sunDirection) > cos(sunAngularRadius))
 			{
 				float sunVisibility = 1.f;
@@ -141,8 +207,8 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 					sunVisibility = max(cloudsCombined.w - 0.01f, 0.f);
 				}
 				
-				finalColor = GetSolarRadiance(bindData.atmosphere) * sunVisibility;
-			}	
+				finalColor = GetSolarRadiance(atmosphere) * sunVisibility;
+			}
 		}
 	}
 
@@ -171,7 +237,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		// Note that the shadowLength here is intentionally 0, as we don't care about the shadow behind the cloud, which
 		// is probably extremely small if not actually 0 anyways.
 		float3 perspectiveTransmittance;
-		float3 perspectiveScattering = GetSkyRadianceToPoint(bindData.atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cloudPosition - planetCenter, backPosition - planetCenter, 0.f, sunDirection, perspectiveTransmittance);
+		float3 perspectiveScattering = GetSkyRadianceToPoint(atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cloudPosition - planetCenter, backPosition - planetCenter, 0.f, sunDirection, perspectiveTransmittance);
 		
 		// Composite.
 		perspectiveScattering *= atmosphereRadianceExposure;
@@ -203,8 +269,8 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		
 		float3 perspectiveTransmittanceNear;
 		float3 perspectiveTransmittanceFar;
-		float3 perspectiveScatteringNear = GetSkyRadianceToPoint(bindData.atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, hitPosition - planetCenter, shadowLength, sunDirection, perspectiveTransmittanceNear);
-		float3 perspectiveScatteringFar = GetSkyRadianceToPointNearShadow(bindData.atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, hitPosition - planetCenter, shadowLength, sunDirection, perspectiveTransmittanceFar);
+		float3 perspectiveScatteringNear = GetSkyRadianceToPoint(atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, hitPosition - planetCenter, shadowLength, sunDirection, perspectiveTransmittanceNear);
+		float3 perspectiveScatteringFar = GetSkyRadianceToPointNearShadow(atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, hitPosition - planetCenter, shadowLength, sunDirection, perspectiveTransmittanceFar);
 		
 		// Blend between the near and far values.
 #ifdef ENABLE_FAR_SHADOW_FIX
@@ -224,11 +290,11 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	
 	else
 	{
-		perspectiveScattering = GetSkyRadiance(bindData.atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, rayDirection, shadowLength, sunDirection, perspectiveTransmittance);
+		perspectiveScattering = GetSkyRadiance(atmosphere, transmittanceLut, scatteringLut, bilinearWrap, cameraPosition - planetCenter, rayDirection, shadowLength, sunDirection, perspectiveTransmittance);
 	}
 	
 	perspectiveScattering *= atmosphereRadianceExposure;
 	finalColor = finalColor * perspectiveTransmittance + perspectiveScattering;
-
+	
 	outputTexture[dispatchId.xy] = float4(finalColor, 1);
 }

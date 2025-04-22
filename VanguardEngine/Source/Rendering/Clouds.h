@@ -16,6 +16,7 @@ struct CloudResources
 	RenderResource cloudsScatteringTransmittance;
 	RenderResource cloudsDepth;
 	RenderResource cloudsVisibilityMap;
+	RenderResource cloudsCirrus;
 	RenderResource weather;
 };
 
@@ -46,7 +47,8 @@ private:
 	TextureHandle baseShapeNoise;  // 3D, single channel.
 	TextureHandle detailShapeNoise;  // 3D, single channel.
 
-	TextureHandle shadowMap;
+	// Cirrus clouds are not raymarched, they come from a painted texture.
+	TextureHandle cirrusClouds;
 
 	RenderResource lastFrameScatteringUpscaled;
 	RenderResource lastFrameDepthUpscaled;

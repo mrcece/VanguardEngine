@@ -86,8 +86,8 @@ float SampleCloudDensity(Texture2D<float3> weatherTexture, Texture3D<float> base
 	// Shorter clouds taper off towards the top, while staying more flat on the bottom.
 	const float shortCoverage = pow(coverage, (heightFraction * 3.8 + 0.1));
 	// Taller clouds form an anvil-like shape.
-	const float tallCoverage = pow(coverage, 1.0 - 0.8 * abs(heightFraction - 0.5));
-	coverage = lerp(shortCoverage, tallCoverage, type);
+	const float tallCoverage = pow(coverage, 1.0 - 0.8 * abs(heightFraction - 0.6));
+	coverage = lerp(shortCoverage, tallCoverage, type + 0.1);
 
 	const float heightGradient = GetDensityHeightGradientForPoint(position, type);
 

@@ -2,6 +2,7 @@
 
 #include <Rendering/Atmosphere.h>
 #include <Rendering/Device.h>
+#include <Rendering/Renderer.h>
 #include <Rendering/RenderGraph.h>
 #include <Rendering/RenderPass.h>
 #include <Rendering/ResourceManager.h>
@@ -273,6 +274,7 @@ void Atmosphere::Precompute(CommandList& list, TextureHandle transmittanceHandle
 
 Atmosphere::~Atmosphere()
 {
+	device->GetResourceManager().Destroy(modelBuffer);
 	device->GetResourceManager().Destroy(transmittanceTexture);
 	device->GetResourceManager().Destroy(scatteringTexture);
 	device->GetResourceManager().Destroy(irradianceTexture);
@@ -287,7 +289,6 @@ void Atmosphere::Initialize(RenderDevice* inDevice, entt::registry& registry)
 {
 	device = inDevice;
 
-	CvarCreate("renderCloudShadowMap", "Projects the cloud shadow map onto the planet surface, for debugging purposes. 0=off, 1=on", 0);
 	CvarCreate("renderLightShafts", "Controls rendering of volumetric light shafts, currently only cast by clouds. 0=off, 1=on", 1);
 	CvarCreate("farVolumetricShadowFix", "Enables a fix for very distant objects that are masked by volumetric shadows, which normally "
 		"show up too brightly against the surrounding sky", 1);
@@ -315,6 +316,16 @@ void Atmosphere::Initialize(RenderDevice* inDevice, entt::registry& registry)
 
 	luminancePrecomputeLayout = RenderPipelineLayout{}
 		.ComputeShader({ "Atmosphere/Luminance", "Main" });
+
+	BufferDescription modelDesc{
+		.updateRate = ResourceFrequency::Static,
+		.bindFlags = BindFlag::ShaderResource,
+		.accessFlags = AccessFlag::CPUWrite,
+		.size = 1,
+		.stride = sizeof(AtmosphereData)
+	};
+
+	modelBuffer = device->GetResourceManager().Create(modelDesc, VGText("Atmosphere model data"));
 
 	TextureDescription transmittanceDesc{
 		.bindFlags = BindFlag::ShaderResource | BindFlag::UnorderedAccess,
@@ -410,11 +421,12 @@ void Atmosphere::Initialize(RenderDevice* inDevice, entt::registry& registry)
 
 AtmosphereResources Atmosphere::ImportResources(RenderGraph& graph)
 {
+	const auto modelTag = graph.Import(modelBuffer);
 	const auto transmittanceTag = graph.Import(transmittanceTexture);
 	const auto scatteringTag = graph.Import(scatteringTexture);
 	const auto irradianceTag = graph.Import(irradianceTexture);
 
-	return { transmittanceTag, scatteringTag, irradianceTag };
+	return { modelTag, transmittanceTag, scatteringTag, irradianceTag };
 }
 
 void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources resourceHandles, CloudResources cloudResources, RenderResource cameraBuffer,
@@ -428,8 +440,11 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		precomputePass.Write(resourceHandles.irradianceHandle, ResourceBind::UAV);
 		precomputePass.Bind([&, resourceHandles](CommandList& list, RenderPassResources& resources)
 		{
-			Precompute(list, resources.GetTexture(resourceHandles.transmittanceHandle), resources.GetTexture(resourceHandles.scatteringHandle), resources.GetTexture(resourceHandles.irradianceHandle));
+			Precompute(list, resources.GetTexture(resourceHandles.transmittanceHandle), resources.GetTexture(resourceHandles.scatteringHandle), resources.GetTexture(resourceHandles.irradianceHandle));			
 		});
+
+		// Update the model buffer. The precompute step doesn't actually use this buffer, instead just using root descriptors.
+		device->GetResourceManager().Write(modelBuffer, model);
 		
 		dirty = false;
 	}
@@ -442,25 +457,22 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 
 	auto& composePass = graph.AddPass("Sky Atmosphere Compose Pass", ExecutionQueue::Compute);
 	composePass.Read(cameraBuffer, ResourceBind::SRV);
-	//composePass.Read(outputHDR, ResourceBind::SRV);
-	composePass.Read(cloudResources.cloudsScatteringTransmittance, ResourceBind::SRV);
-	composePass.Read(cloudResources.cloudsDepth, ResourceBind::SRV);
-	composePass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
-	composePass.Read(depthStencil, ResourceBind::SRV);
-	composePass.Write(outputHDR, TextureView{}.UAV("", 0));
-
+	composePass.Read(resourceHandles.modelHandle, ResourceBind::SRV);
 	composePass.Read(resourceHandles.transmittanceHandle, ResourceBind::SRV);
 	composePass.Read(resourceHandles.scatteringHandle, ResourceBind::SRV);
 	composePass.Read(resourceHandles.irradianceHandle, ResourceBind::SRV);
-
-	composePass.Bind([&, cloudResources, cameraBuffer, depthStencil, outputHDR, resourceHandles, solarZenithAngle](CommandList& list, RenderPassResources& resources)
+	composePass.Read(cloudResources.cloudsScatteringTransmittance, ResourceBind::SRV);
+	composePass.Read(cloudResources.cloudsDepth, ResourceBind::SRV);
+	composePass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
+	composePass.Read(cloudResources.cloudsCirrus, ResourceBind::SRV);
+	composePass.Read(depthStencil, ResourceBind::SRV);
+	composePass.Write(outputHDR, TextureView{}.UAV("", 0));
+	composePass.Bind([&, cameraBuffer, resourceHandles, cloudResources, depthStencil, outputHDR, solarZenithAngle](CommandList& list, RenderPassResources& resources)
 	{
-		const auto renderShadowMap = *CvarGet("renderCloudShadowMap", int);
 		const auto renderLightShafts = *CvarGet("renderLightShafts", int);
 
 		auto composeLayout = RenderPipelineLayout{}
 			.ComputeShader({ "Atmosphere/Compose", "Main" })
-			.Macro({ "CLOUDS_RENDER_SHADOWMAP", renderShadowMap })
 			.Macro({ "RENDER_LIGHT_SHAFTS", renderLightShafts });
 
 		if (*CvarGet("farVolumetricShadowFix", int) > 0)
@@ -473,12 +485,13 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		list.BindPipeline(composeLayout);
 
 		struct {
-			AtmosphereData atmosphere;
 			uint32_t cameraBuffer;
 			uint32_t cameraIndex;
+			uint32_t atmosphereBuffer;
 			uint32_t cloudsScatteringTransmittanceTexture;
 			uint32_t cloudsDepthTexture;
 			uint32_t cloudsVisibilityTexture;
+			uint32_t cloudsCirrusTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t outputTexture;
 			uint32_t transmissionTexture;
@@ -486,14 +499,17 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 			uint32_t irradianceTexture;
 			float solarZenithAngle;
 			float globalWeatherCoverage;
+			XMFLOAT2 wind;
+			float time;
 		} bindData;
 
-		bindData.atmosphere = model;
 		bindData.cameraBuffer = resources.Get(cameraBuffer);
 		bindData.cameraIndex = 0;  // #TODO: Support multiple cameras.
+		bindData.atmosphereBuffer = resources.Get(resourceHandles.modelHandle);
 		bindData.cloudsScatteringTransmittanceTexture = resources.Get(cloudResources.cloudsScatteringTransmittance);
 		bindData.cloudsDepthTexture = resources.Get(cloudResources.cloudsDepth);
 		bindData.cloudsVisibilityTexture = resources.Get(cloudResources.cloudsVisibilityMap);
+		bindData.cloudsCirrusTexture = resources.Get(cloudResources.cloudsCirrus);
 		bindData.geometryDepthTexture = resources.Get(depthStencil);
 		bindData.outputTexture = resources.Get(outputHDR, "");
 		bindData.transmissionTexture = resources.Get(resourceHandles.transmittanceHandle);
@@ -501,6 +517,8 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		bindData.irradianceTexture = resources.Get(resourceHandles.irradianceHandle);
 		bindData.solarZenithAngle = solarZenithAngle;
 		bindData.globalWeatherCoverage = clouds.coverage;
+		bindData.wind = { clouds.windDirection.x * clouds.windStrength, clouds.windDirection.y * clouds.windStrength };
+		bindData.time = Renderer::Get().GetAppTime();
 
 		list.BindConstants("bindData", bindData);
 

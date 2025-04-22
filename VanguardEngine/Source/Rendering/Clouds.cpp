@@ -7,6 +7,8 @@
 #include <Rendering/RenderPass.h>
 #include <Rendering/Atmosphere.h>
 #include <Rendering/RenderUtils.h>
+#include <Asset/TextureLoader.h>
+#include <Core/Config.h>
 #include <Utility/Math.h>
 
 void Clouds::GenerateWeather(CommandList& list, uint32_t weatherTexture)
@@ -117,6 +119,8 @@ void Clouds::Initialize(RenderDevice* inDevice)
 	//};
 	//distortionNoise = device->GetResourceManager().Create(distortionNoiseDesc, VGText("Clouds distortion noise"));
 
+	cirrusClouds = AssetLoader::LoadTexture(*device, Config::utilitiesPath / "Cirrus4k.png", false);
+
 	lastFrameScatteringUpscaled.id = 0;
 	lastFrameDepthUpscaled.id = 0;
 	lastFrameVisibilityUpscaled.id = 0;
@@ -127,6 +131,7 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 	const auto weatherTag = graph.Import(weather);
 	const auto baseShapeNoiseTag = graph.Import(baseShapeNoise);
 	const auto detailShapeNoiseTag = graph.Import(detailShapeNoise);
+	const auto cirrusTag = graph.Import(cirrusClouds);
 	const auto solarZenithAngle = registry.get<TimeOfDayComponent>(atmosphere.sunLight).solarZenithAngle;
 	const auto blueNoiseTag = graph.Import(RenderUtils::Get().blueNoise);
 
@@ -410,5 +415,5 @@ CloudResources Clouds::Render(RenderGraph& graph, entt::registry& registry, cons
 	lastFrameDepthUpscaled = cloudDepthUpscaled;
 	lastFrameVisibilityUpscaled = cloudVisibilityUpscaled;
 
-	return { cloudOutputUpscaled, cloudDepthUpscaled, cloudVisibilityUpscaled, weatherTag };
+	return { cloudOutputUpscaled, cloudDepthUpscaled, cloudVisibilityUpscaled, cirrusTag, weatherTag };
 }
