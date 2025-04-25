@@ -15,6 +15,7 @@ struct BindData
 	uint cloudsDepthTexture;
 	uint cloudsVisibilityTexture;
 	uint cloudsCirrusTexture;
+	uint weatherTexture;
 	uint geometryDepthTexture;
 	uint outputTexture;
 	uint transmissionTexture;
@@ -22,8 +23,8 @@ struct BindData
 	uint irradianceTexture;
 	float solarZenithAngle;
 	float globalWeatherCoverage;
-	float2 wind;
 	float time;
+	float2 wind;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
@@ -80,6 +81,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 	Texture2D<float> cloudsDepthTexture = ResourceDescriptorHeap[bindData.cloudsDepthTexture];
 	Texture2D<float> cloudsVisibilityTexture = ResourceDescriptorHeap[bindData.cloudsVisibilityTexture];
 	Texture2D<float4> cloudsCirrusTexture = ResourceDescriptorHeap[bindData.cloudsCirrusTexture];
+	Texture2D<float3> weatherTexture = ResourceDescriptorHeap[bindData.weatherTexture];
 	Texture2D<float> geometryDepthTexture = ResourceDescriptorHeap[bindData.geometryDepthTexture];
 	RWTexture2D<float4> outputTexture = ResourceDescriptorHeap[bindData.outputTexture];
 
@@ -164,7 +166,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 			GetSunAndSkyIrradiance(atmosphere, transmittanceLut, irradianceLut, bilinearWrap, hitPosition - planetCenter, surfaceNormal, sunDirection, sunIrradiance, skyIrradiance);
 		
 			// The irradiance on the planet surface is heavily influenced by visibility.
-			float sunVisibility = CalculateSunVisibility(hitPosition, sunCamera /*, ResourceDescriptorHeap[bindData.cloudsShadowMap]*/);
+			float sunVisibility = CalculateSunVisibility(hitPosition, sunDirection, weatherTexture);
 			float skyVisibility = CalculateSkyVisibility(hitPosition, bindData.globalWeatherCoverage);
 			
 			float3 radiance = atmosphere.surfaceColor * (1.f / pi) * ((sunIrradiance * sunVisibility) + (skyIrradiance * skyVisibility));
@@ -175,10 +177,20 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 		
 		else
 		{
-			// Didn't hit the planet, use the cirrus cloud layer as the background.
+			// Didn't hit the planet, use the cirrus cloud layer as the background. Since cirrus clouds are transparent,
+			// compute the background aerial perspective first and composite on top.
+			
 			float3 hitPosition;
-			finalColor = SampleCirrusClouds(cloudsCirrusTexture, planetCenter, cameraPosition, rayDirection, hitPosition);
-			lastDepth = length(hitPosition) - 0.00001;  // Subtract a small number so that no hit corresponds with a negative depth.
+			float3 cirrusColor = SampleCirrusClouds(cloudsCirrusTexture, planetCenter, cameraPosition, rayDirection, hitPosition);
+			lastDepth = length(hitPosition) - 0.00001; // Subtract a small number so that no hit corresponds with a negative depth.
+			
+			// Start at the cirrus layer and end in space. Note that there's no shadow above the cirrus clouds.
+			float3 perspectiveTransmittance;
+			float3 perspectiveScattering = GetSkyRadiance(atmosphere, transmittanceLut, scatteringLut, bilinearWrap, hitPosition - planetCenter, rayDirection, 0.f, sunDirection, perspectiveTransmittance);
+			
+			// Branchless version of: if lastDepth < 0: perspectiveScattering = 0
+			// Necessary so that negative depth (no hit) doesn't contribute any aerial perspective.
+			perspectiveScattering = max(min(lastDepth * 10.xxx, perspectiveScattering), 0.xxx);
 			
 			// Using the sun direction as the normal vector causes artifacts when the sun is setting.
 			float3 surfaceNormal = float3(0, 0, 1);
@@ -188,7 +200,10 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 			GetSunAndSkyIrradiance(atmosphere, transmittanceLut, irradianceLut, bilinearWrap, hitPosition - planetCenter, surfaceNormal, sunDirection, sunIrradiance, skyIrradiance);
 			
 			// The irradiance on the cirrus clouds is not impacted by visibility, so skip that computation.
-			finalColor *= (sunIrradiance + skyIrradiance);
+			cirrusColor *= (sunIrradiance + skyIrradiance);
+			
+			// Composite. No need to apply transmittance, the prior color is empty.
+			finalColor = cirrusColor + perspectiveScattering * atmosphereRadianceExposure;
 			
 			// If the view ray intersects the sun disk, add the direct radiance of the sun on top.
 			if (dot(rayDirection, sunDirection) > cos(sunAngularRadius))
@@ -207,6 +222,7 @@ void Main(uint3 dispatchId : SV_DispatchThreadID)
 					sunVisibility = max(cloudsCombined.w - 0.01f, 0.f);
 				}
 				
+				// Intentionally blow away prior work, the sun is so bright it doesn't matter what came before.
 				finalColor = GetSolarRadiance(atmosphere) * sunVisibility;
 			}
 		}

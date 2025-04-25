@@ -54,7 +54,7 @@ float RayMarch(Camera camera, float2 baseUv, float2 jitteredUv, uint width, uint
 	else
 	{
 		// Outside of the cloud layer.
-		return 0.f;
+		return 0;
 	}
 
 	// Stop short if we hit the planet.
@@ -64,7 +64,8 @@ float RayMarch(Camera camera, float2 baseUv, float2 jitteredUv, uint width, uint
 		marchEnd = min(marchEnd, planetIntersect.x);
 	}
 
-	marchEnd = max(0, marchEnd);
+	// Limit the march distance. Far away clouds won't meaningfully contribute shadow and are simply too expensive to march to.
+	marchEnd = clamp(marchEnd, 0, 50);
 	
 	// Early out of the march if we hit opaque geometry.
 	// Using the base UV instead of jittered provides slightly better edges around geometry.
@@ -80,7 +81,7 @@ float RayMarch(Camera camera, float2 baseUv, float2 jitteredUv, uint width, uint
 
 	if (marchEnd <= marchStart)
 	{
-		return 0.f;
+		return 0;
 	}
 	
 	uint blueNoiseWidth, blueNoiseHeight;
@@ -157,7 +158,7 @@ float RayMarch(Camera camera, float2 baseUv, float2 jitteredUv, uint width, uint
 	}
 	
 #ifdef CLOUDS_DEBUG_MARCHCOUNT
-	return totalSteps;
+	return float(totalSteps);
 #else
 	return totalShadow;
 #endif

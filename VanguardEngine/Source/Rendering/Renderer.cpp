@@ -562,7 +562,7 @@ void Renderer::Render(entt::registry& registry)
 	forwardPass.Read(iblResources.prefilterTag, ResourceBind::SRV);
 	forwardPass.Read(iblResources.brdfTag, ResourceBind::SRV);
 	forwardPass.Read(atmosphereIrradiance, ResourceBind::SRV);
-	forwardPass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
+	forwardPass.Read(cloudResources.weather, ResourceBind::SRV);
 	forwardPass.Read(meshIndirectCulledRenderArgsTag, ResourceBind::Indirect);
 	forwardPass.Output(outputHDRTag, OutputBind::RTV, LoadType::Clear);
 	forwardPass.Bind([&](CommandList& list, RenderPassResources& resources)
@@ -594,9 +594,11 @@ void Renderer::Render(entt::registry& registry)
 			uint32_t lightBuffer;
 			uint32_t atmosphereIrradianceBuffer;
 			float globalWeatherCoverage;
-			XMFLOAT2 padding;
+			uint32_t weatherTexture;
+			float padding;
 			ClusterData clusterData;
 			IblData iblData;
+			uint32_t outputResolution[2];
 		} bindData;
 
 		bindData.objectBuffer = resources.Get(instanceBufferTag);
@@ -607,8 +609,13 @@ void Renderer::Render(entt::registry& registry)
 		bindData.lightBuffer = resources.Get(lightBufferTag);
 		bindData.atmosphereIrradianceBuffer = resources.Get(atmosphereIrradiance);
 		bindData.globalWeatherCoverage = clouds.coverage;  // #TODO: Scale by precipitation?
+		bindData.weatherTexture = resources.Get(cloudResources.weather);
 		bindData.clusterData = clusterData;
 		bindData.iblData = iblData;
+
+		const auto& outputComponent = device->GetResourceManager().Get(resources.GetTexture(outputHDRTag));
+		bindData.outputResolution[0] = outputComponent.description.width;
+		bindData.outputResolution[1] = outputComponent.description.height;
 
 		{
 			VGScopedGPUStat("Opaque", device->GetDirectContext(), list.Native());

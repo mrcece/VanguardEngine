@@ -3,23 +3,22 @@
 #ifndef __VISIBILITY_HLSLI__
 #define __VISIBILITY_HLSLI__
 
-#include "Camera.hlsli"
+#include "Math.hlsli"
+#include "Constants.hlsli"
+#include "Clouds/Core.hlsli"
 
 // Position must be in atmosphere space.
-float CalculateSunVisibility(float3 position, Camera sunCamera/*, Texture2D<float> cloudsShadowMap*/)
+float CalculateSunVisibility(float3 position, float3 sunDirection, Texture2D<float3> weatherTexture)
 {
-    matrix sunViewProjection = mul(sunCamera.view, sunCamera.projection);
+    // Sample the weather texture as a crude approximation for sun visibility. The ray marched visibility can't be
+    // reliably used here as it encodes aggregate shadow along the ray, instead of at the end point.
+    float theta = acos(-sunDirection.z);
+    float distance = cloudLayerBottom - position.z;
+    float displacement = distance * tan(theta) * -sign(sunDirection.x);
     
-    // Computed the ray position, now sample the shadow volume.
-    float4 positionSunSpace = mul(float4(position, 1.0), sunViewProjection);
-    float3 projectedCoords = positionSunSpace.xyz / positionSunSpace.w;
-    projectedCoords = projectedCoords * 0.5 + 0.5;
-		
-    //float shadowSample = cloudsShadowMap.Sample(bilinearClamp, projectedCoords.xy);
-    float shadowSample = 0.f;
+    float3 weather = SampleWeather(weatherTexture, position + float3(displacement, 0.f, 0.f));
     
-	// Direct occlusion to the sun, just sample the clouds depth map.
-    return (shadowSample > 0 && shadowSample < 10000) ? 0.5f : 1.f;
+    return saturate(1 - min(weather.x, 0.6) * 1.8);
 }
 
 // Position must be in atmosphere space.

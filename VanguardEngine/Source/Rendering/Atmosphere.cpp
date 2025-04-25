@@ -465,6 +465,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 	composePass.Read(cloudResources.cloudsDepth, ResourceBind::SRV);
 	composePass.Read(cloudResources.cloudsVisibilityMap, ResourceBind::SRV);
 	composePass.Read(cloudResources.cloudsCirrus, ResourceBind::SRV);
+	composePass.Read(cloudResources.weather, ResourceBind::SRV);
 	composePass.Read(depthStencil, ResourceBind::SRV);
 	composePass.Write(outputHDR, TextureView{}.UAV("", 0));
 	composePass.Bind([&, cameraBuffer, resourceHandles, cloudResources, depthStencil, outputHDR, solarZenithAngle](CommandList& list, RenderPassResources& resources)
@@ -492,6 +493,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 			uint32_t cloudsDepthTexture;
 			uint32_t cloudsVisibilityTexture;
 			uint32_t cloudsCirrusTexture;
+			uint32_t weatherTexture;
 			uint32_t geometryDepthTexture;
 			uint32_t outputTexture;
 			uint32_t transmissionTexture;
@@ -499,8 +501,8 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 			uint32_t irradianceTexture;
 			float solarZenithAngle;
 			float globalWeatherCoverage;
-			XMFLOAT2 wind;
 			float time;
+			XMFLOAT2 wind;
 		} bindData;
 
 		bindData.cameraBuffer = resources.Get(cameraBuffer);
@@ -510,6 +512,7 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		bindData.cloudsDepthTexture = resources.Get(cloudResources.cloudsDepth);
 		bindData.cloudsVisibilityTexture = resources.Get(cloudResources.cloudsVisibilityMap);
 		bindData.cloudsCirrusTexture = resources.Get(cloudResources.cloudsCirrus);
+		bindData.weatherTexture = resources.Get(cloudResources.weather);
 		bindData.geometryDepthTexture = resources.Get(depthStencil);
 		bindData.outputTexture = resources.Get(outputHDR, "");
 		bindData.transmissionTexture = resources.Get(resourceHandles.transmittanceHandle);
@@ -517,8 +520,8 @@ void Atmosphere::Render(RenderGraph& graph, Clouds& clouds, AtmosphereResources 
 		bindData.irradianceTexture = resources.Get(resourceHandles.irradianceHandle);
 		bindData.solarZenithAngle = solarZenithAngle;
 		bindData.globalWeatherCoverage = clouds.coverage;
-		bindData.wind = { clouds.windDirection.x * clouds.windStrength, clouds.windDirection.y * clouds.windStrength };
 		bindData.time = Renderer::Get().GetAppTime();
+		bindData.wind = { clouds.windDirection.x * clouds.windStrength, clouds.windDirection.y * clouds.windStrength };
 
 		list.BindConstants("bindData", bindData);
 

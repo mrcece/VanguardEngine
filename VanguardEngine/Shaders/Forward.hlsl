@@ -41,9 +41,11 @@ struct BindData
 	uint lightBuffer;
 	uint atmosphereIrradianceBuffer;
 	float globalWeatherCoverage;
-	float2 padding;
+	uint weatherTexture;
+	float padding;
 	ClusterData clusterData;
 	IblData iblData;
+	uint2 outputResolution;
 };
 
 ConstantBuffer<BindData> bindData : register(b0);
@@ -170,6 +172,7 @@ float4 PSMain(PixelIn input) : SV_Target
 	float3 viewDirection = normalize(camera.position.xyz - input.position);
 	float3 normalDirection = normal;
 	
+	
 	Material materialSample;
 	materialSample.baseColor = baseColor;
 	materialSample.metalness = metallicRoughness.r;
@@ -182,6 +185,7 @@ float4 PSMain(PixelIn input) : SV_Target
 	StructuredBuffer<uint> clusteredLightList = ResourceDescriptorHeap[bindData.clusterData.lightListBuffer];
 	StructuredBuffer<uint2> clusteredLightInfo = ResourceDescriptorHeap[bindData.clusterData.lightInfoBuffer];
 	StructuredBuffer<float3> atmosphereIrradiance = ResourceDescriptorHeap[bindData.atmosphereIrradianceBuffer];
+	Texture2D<float3> weatherTexture = ResourceDescriptorHeap[bindData.weatherTexture];
 	
 	uint3 clusterId = DrawToClusterId(bindData.clusterData.froxelSize, bindData.clusterData.logY, camera, input.positionCS.xy, input.depthVS);
 	uint2 lightInfo = clusteredLightInfo[ClusterId2Index(bindData.clusterData.dimensions, clusterId)];
@@ -198,13 +202,15 @@ float4 PSMain(PixelIn input) : SV_Target
 			
 			float3 cameraPositionAtmoSpace = ComputeAtmosphereCameraPosition(camera);
 			float3 cameraPoint = cameraPositionAtmoSpace - planetCenter;
+			// Convert to kilometers. The atmosphere should probably provide a helper function to convert, but oh well.
+			float3 hitPositionAtmoSpace = input.position / 1000.f;
 			
 			float3 sunIrradiance;
 			float3 skyIrradiance;
 			RecomposeSeparableSunAndSkyIrradiance(cameraPoint, normal, -light.direction, separatedSunIrradianceNearCamera,
 				separatedSkyIrradianceNearCamera, sunIrradiance, skyIrradiance);
 			
-			const float sunVisibility = CalculateSunVisibility(cameraPositionAtmoSpace, sunCamera /*, ResourceDescriptorHeap[bindData.cloudsShadowMap]*/);
+			const float sunVisibility = CalculateSunVisibility(hitPositionAtmoSpace, light.direction, weatherTexture);
 			const float skyVisibility = CalculateSkyVisibility(cameraPositionAtmoSpace, bindData.globalWeatherCoverage);
 			
 			// Combine both atmospheric irradiance contributions, attenuated by any visibility modifications, such as
