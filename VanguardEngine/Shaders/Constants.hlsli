@@ -12,7 +12,7 @@ static const float alphaTestThreshold = 0.5;
 static const float3 planetCenter = float3(0.f, 0.f, -6360.f);
 
 // Atmosphere
-static const float atmosphereRadianceExposure = 5.f;  // 10 is the default exposure used in Bruneton's demo.
+static const float atmosphereRadianceExposure = 10.f;  // 10 is the default exposure used in Bruneton's demo.
 
 // Clouds
 static const float cloudLayerBottom = 1400.0 / 1000.0;  // Kilometers.

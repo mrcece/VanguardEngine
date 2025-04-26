@@ -354,7 +354,7 @@ MARCH_RESULT RayMarchInternal(Texture3D<float> baseShapeNoiseTexture, Texture3D<
 			// The approximate unattenuated energy hitting the clouds is the full combined sun and sky irradiance.
 			// Note that sun/sky visibility is NOT used here, as the clouds are the ones blocking the light from the atmosphere.
 			float3 energy = sunIrradiance + skyIrradiance;
-			energy *= lightEnergy * 0.248;  // Attenuate the atmospheric irradiance by the cloud lighting model.
+			energy *= lightEnergy * 0.118;  // Attenuate the atmospheric irradiance by the cloud lighting model.
 			
 			//float stepSize = smallStepSize * 1000.0;  // Kilometers to meters.
 			// Don't perform a physically accurate scattering integration, as numerical precision issues are happening.
