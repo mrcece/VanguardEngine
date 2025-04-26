@@ -104,6 +104,7 @@ public:
 
 	void FreezeCamera();
 	void ReloadShaderPipelines();
+	void ResetAppTime();
 };
 
 inline void Renderer::SubmitFrameTime(uint32_t timeUs)

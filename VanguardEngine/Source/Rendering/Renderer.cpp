@@ -716,3 +716,8 @@ void Renderer::ReloadShaderPipelines()
 {
 	shouldReloadShaders = true;
 }
+
+void Renderer::ResetAppTime()
+{
+	appTime = 0;
+}

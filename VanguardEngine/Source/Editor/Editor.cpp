@@ -18,6 +18,23 @@ Editor::Editor()
 #if ENABLE_EDITOR
 	ui = std::make_unique<EditorUI>();
 #endif
+
+	// Allow toggling the editor rendering entirely with F1.
+	BindKey(ImGuiKey_F1, []()
+	{
+		auto& editor = Editor::Get();
+		editor.enabled = !editor.enabled;
+	});
+
+	BindKey(ImGuiKey_R, []()
+	{
+		Renderer::Get().ReloadShaderPipelines();
+	});
+
+	BindKey(ImGuiKey_T, []()
+	{
+		Renderer::Get().ResetAppTime();
+	});
 }
 
 Editor::~Editor()
@@ -33,6 +50,19 @@ void Editor::Update()
 		Editor::Get().ui->showFps = !Editor::Get().ui->showFps;
 	});
 
+	// Process keybinds.
+	for (auto& [key, state, bind] : keybinds)
+	{
+		VGLog(logEditor, "bind: {} state={}", key, state);
+		const auto pressed = ImGui::IsKeyDown(key);
+		if (pressed && !state)
+		{
+			bind();
+		}
+
+		state = pressed;
+	}
+
 	ui->Update();
 }
 
@@ -41,23 +71,6 @@ void Editor::Render(RenderGraph& graph, RenderDevice& device, Renderer& renderer
 	RenderResource weather)
 {
 #if ENABLE_EDITOR
-	// Allow toggling the editor rendering entirely with F1.
-	auto& io = ImGui::GetIO();
-	static bool newPress = true;
-	if (ImGui::IsKeyPressed(ImGuiKey_F1))
-	{
-		if (newPress)
-		{
-			enabled = !enabled;
-			newPress = false;
-		}
-	}
-
-	else
-	{
-		newPress = true;
-	}
-
 	if (enabled)
 	{
 		// Render the active overlay if there is one.
@@ -134,6 +147,11 @@ void Editor::Render(RenderGraph& graph, RenderDevice& device, Renderer& renderer
 		});
 	}
 #endif
+}
+
+void Editor::BindKey(ImGuiKey key, std::function<void()> function)
+{
+	keybinds.emplace_back(key, false, std::move(function));
 }
 
 void Editor::LogMessage(const std::string& message)
