@@ -172,7 +172,6 @@ float4 PSMain(PixelIn input) : SV_Target
 	float3 viewDirection = normalize(camera.position.xyz - input.position);
 	float3 normalDirection = normal;
 	
-	
 	Material materialSample;
 	materialSample.baseColor = baseColor;
 	materialSample.metalness = metallicRoughness.r;

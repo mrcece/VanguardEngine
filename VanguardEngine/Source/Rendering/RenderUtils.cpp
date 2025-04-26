@@ -50,17 +50,20 @@ void RenderUtils::ClearUAV(CommandList& list, BufferHandle buffer, uint32_t buff
 	{
 		list.BindPipelineState(clearUAVState);
 
+		VGAssert(bufferComponent.description.stride % 4 == 0, "Clearing a structured buffer requires int32-aligned strides.");
+
 		struct BindData
 		{
 			uint32_t bufferHandle;
 			uint32_t bufferSize;
 		} bindData;
 		bindData.bufferHandle = bufferHandle;
-		bindData.bufferSize = bufferComponent.description.size;
+		// The buffer size should be the total size in bytes / 4, not the element count, as the buffer is indexed like a uint buffer.
+		bindData.bufferSize = bufferComponent.description.size * bufferComponent.description.stride / 4ull;
 
 		list.BindConstants("bindData", bindData);
 
-		uint32_t dispatchSize = static_cast<uint32_t>(std::ceil(bufferComponent.description.size / 64.f));
+		uint32_t dispatchSize = static_cast<uint32_t>(std::ceil(bindData.bufferSize / 64.f));
 		list.Dispatch(dispatchSize, 1, 1);
 	}
 }

@@ -696,6 +696,9 @@ float3 GetSkyRadianceToPoint(AtmosphereData atmosphere, Texture2D transmittanceL
 	
 	transmittance = GetTransmittance(atmosphere, transmittanceLut, lutSampler, radius, mu, d, rayIntersectsGround);
 	
+	// Having some pretty bad artifacts here, especially with strong mie scattering. Appears to be an issue with my implementation, but
+	// I haven't determine the cause. Could be precomputation related, as my LUTs don't quite match Bruneton's. Solving this would require
+	// an extensive analysis and debug, which I don't have time for now.
 	float3 singleMieScattering;
 	float3 scattering = GetCombinedScattering(atmosphere, scatteringLut, lutSampler, radius, mu, muS, nu, rayIntersectsGround, singleMieScattering);
 	

@@ -94,7 +94,7 @@ void ClusteredLightCulling::Initialize(RenderDevice* inDevice)
 	// #TODO: Dynamically reallocate.
 	constexpr auto maxDivisionsX = 60;
 	constexpr auto maxDivisionsY = 34;
-	constexpr auto maxDivisionsZ = 200;
+	constexpr auto maxDivisionsZ = 280;
 
 	BufferDescription clusterBoundsDesc{};
 	clusterBoundsDesc.updateRate = ResourceFrequency::Static;
