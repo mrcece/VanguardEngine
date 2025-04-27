@@ -51,6 +51,12 @@ namespace AssetLoader
 	{
 		VGScopedCPUStat("Load Mesh");
 
+		if (!std::filesystem::exists(path))
+		{
+			VGLogError(logAsset, "Asset '{}' does not exist in the filesystem.", path.filename().generic_wstring());
+			return {};
+		}
+
 		std::string error;
 		std::string warning;
 
@@ -108,6 +114,11 @@ namespace AssetLoader
 		if (model.scenes.size() > 1)
 		{
 			VGLogWarning(logAsset, "Asset '{}' contains more than one scene, ignoring all except scene {}.", path.filename().generic_wstring(), model.defaultScene);
+		}
+		else if (model.scenes.size() < 1)
+		{
+			VGLogWarning(logAsset, "Asset '{}' does not contain any scenes.", path.filename().generic_wstring());
+			return {};
 		}
 
 		const auto& scene = model.scenes[model.defaultScene];
