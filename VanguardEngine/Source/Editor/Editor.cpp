@@ -53,7 +53,6 @@ void Editor::Update()
 	// Process keybinds.
 	for (auto& [key, state, bind] : keybinds)
 	{
-		VGLog(logEditor, "bind: {} state={}", key, state);
 		const auto pressed = ImGui::IsKeyDown(key);
 		if (pressed && !state)
 		{
